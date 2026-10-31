@@ -3,7 +3,7 @@
 All notable changes are listed here. Versions follow [Semantic Versioning](https://semver.org/); before
 1.0 any release may change the storage format or the API, and the release notes say how to move over.
 
-## [0.1.0] – unreleased (first public pre-release)
+## [0.1.0] – 2026-10-31 (first public pre-release)
 
 Personal encrypted storage: one user, one volume. Shared folders for groups come in 0.2. Not
 independently audited. Read [SECURITY.md](SECURITY.md) before storing anything you cannot lose.

@@ -41,7 +41,7 @@ Name: the first public version is published as **Venomia CryptStorage** (domain 
 
 | # | Item | Notes |
 |---|---|---|
-| 3.1 | Version number and a `v0.1.0` tag; CHANGELOG | [CHANGELOG.md](../CHANGELOG.md) and the "Supported versions" table in SECURITY.md done 2026-10-26; the tag waits for the rest of this list |
+| 3.1 | Version number and a `v0.1.0` tag; CHANGELOG | Done 2026-10-31: tag `v0.1.0` in the public repository; CHANGELOG and SECURITY.md "Supported versions" |
 | 3.2 | A release workflow that builds the Linux `.deb`, the Windows installer and the static binaries from the tag | Done: `.github/workflows/release.yml` makes a **draft** pre-release from a `v*` tag; run it by hand for a dry run |
 | 3.3 | `SHA256SUMS` and keyless signatures with sigstore/cosign from GitHub Actions | Done in the release workflow; how to verify: [verify-release.md](verify-release.md) |
 | 3.4 | Apply to SignPath Foundation for Windows Authenticode signing | Free for OSI-licensed public projects. Until then document SmartScreen's "More info → Run anyway" |
