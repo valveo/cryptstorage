@@ -30,6 +30,10 @@
 ({{ domain }}). Connecting needs your password and your USB key stick.</p>
 <p class="note">Pre-release software, not independently audited. The programs are not code-signed, so
 Windows SmartScreen may warn about them. Check the SHA-256 sum before you run anything.</p>
+<p>The official releases, with a signed <code>SHA256SUMS</code>, are on
+<a href="https://github.com/valveo/cryptstorage/releases">GitHub</a>; how to check the signature:
+<a href="https://github.com/valveo/cryptstorage/blob/main/docs/verify-release.md">docs/verify-release.md</a>.
+The files below should have the same SHA-256 sums as the release of the same version.</p>
 
 <h2>Files</h2>
 <table>
@@ -46,10 +50,11 @@ Windows SmartScreen may warn about them. Check the SHA-256 sum before you run an
 
 <h2>Windows 10 or newer</h2>
 <p>Run the <code>Setup</code> file. It also installs the components the client needs (WinFsp, SSHFS-Win,
-Dokan). Then open a command prompt and run <code>cryptclient setup</code>; it walks you through the
-account, the USB stick and the recovery code. Afterwards the tray icon connects when you insert the stick.</p>
+Dokan) and the CryptStorage tray icon. Then choose <b>Set up CryptStorage...</b> from the tray menu
+(or run <code>cryptclient setup</code> in a command prompt); it walks you through the account, the USB stick
+and the recovery code. Afterwards the tray icon connects when you insert the stick.</p>
 {% if exe %}<p>Check the file first; the sum must match the one above:</p>
-<pre>certutil -hashfile {{ exe }} SHA256</pre>{% endif %}
+<pre>(Get-FileHash .\{{ exe }}).Hash.ToLower()</pre>{% endif %}
 
 <h2>Linux (Ubuntu, Debian)</h2>
 <pre>sha256sum -c --ignore-missing SHA256SUMS
