@@ -3,8 +3,6 @@ name: Dependency hashes
 # be pinned in cryptclient/deps/deps.go. Run manually when bumping a version.
 on:
   workflow_dispatch:
-  push:
-    paths: [".github/workflows/deps-hashes.yml"]
 # The workflow's token can only read the repository (least privilege before the repository goes public)
 permissions:
   contents: read

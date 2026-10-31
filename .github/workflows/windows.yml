@@ -4,9 +4,12 @@ name: Windows
 # volume (cppcryptfs + Dokan), the installer on a clean machine, and the SSHFS-Win connection to a real sshd
 # (WSL) as an ordinary user. It has no USB stick; the stick and the real test server are tried by
 # windows-selfhosted.yml on the maintainer's own machine (docs/windows-testing.md).
-# Started by hand only: Windows minutes count double against the free quota, so pull requests are tried
-# on the self-hosted runner instead (windows-selfhosted.yml).
+# Runs for pull requests that touch the client, and by hand.
 on:
+  pull_request:
+    paths:
+      - "cryptclient/**"
+      - ".github/workflows/windows.yml"
   workflow_dispatch:
 
 # The workflow's token can only read the repository (least privilege before the repository goes public)

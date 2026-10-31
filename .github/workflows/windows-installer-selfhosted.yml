@@ -5,9 +5,6 @@ name: Windows installer (own machine)
 # only builds). The runner account is an ordinary user, so Inno Setup is installed for that user only,
 # from its pinned official release. Same fork rule as windows-selfhosted.yml.
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/windows-installer-selfhosted.yml"
   workflow_dispatch:
 
 concurrency:

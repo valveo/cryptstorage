@@ -24,13 +24,6 @@ on:
         description: "Start from empty: remove all accounts, SFTP users and stored files (kept aside on the server)"
         type: boolean
         default: false
-  push:
-    paths:
-      - ".github/workflows/deploy-testserver.yml"
-      - "scripts/deploy_testserver.sh"
-      - "scripts/testserver_https.sh"
-      - "scripts/e2ee_testserver.py"
-      - "scripts/install_sftpgo.sh"
 
 env:
   SUDO_PASSWORD: ${{ secrets.LINUXSERVERSSH }}
