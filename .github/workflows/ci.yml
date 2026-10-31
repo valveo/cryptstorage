@@ -38,19 +38,6 @@ jobs:
       sftpgo: ${{ steps.f.outputs.sftpgo }}
       e2ee: ${{ steps.f.outputs.e2ee }}
     steps:
-      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
-      - name: Workspace owned by the runner account
-        run: |
-          [ -d "$GITHUB_WORKSPACE" ] || exit 0
-          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
-            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
-          fi
-          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
-          # every later checkout fails: start that repository again, checkout fetches it anew
-          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
-            echo "broken git data in the workspace: removing it"
-            rm -rf "$GITHUB_WORKSPACE/.git"
-          fi
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -83,19 +70,6 @@ jobs:
     if: ${{ needs.changes.outputs.python == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
-      - name: Workspace owned by the runner account
-        run: |
-          [ -d "$GITHUB_WORKSPACE" ] || exit 0
-          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
-            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
-          fi
-          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
-          # every later checkout fails: start that repository again, checkout fetches it anew
-          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
-            echo "broken git data in the workspace: removing it"
-            rm -rf "$GITHUB_WORKSPACE/.git"
-          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -119,19 +93,6 @@ jobs:
       run:
         working-directory: cryptclient
     steps:
-      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
-      - name: Workspace owned by the runner account
-        run: |
-          [ -d "$GITHUB_WORKSPACE" ] || exit 0
-          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
-            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
-          fi
-          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
-          # every later checkout fails: start that repository again, checkout fetches it anew
-          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
-            echo "broken git data in the workspace: removing it"
-            rm -rf "$GITHUB_WORKSPACE/.git"
-          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
@@ -159,19 +120,6 @@ jobs:
     # A scan takes seconds; a stuck one held the test server for minutes (2026-10-29)
     timeout-minutes: 10
     steps:
-      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
-      - name: Workspace owned by the runner account
-        run: |
-          [ -d "$GITHUB_WORKSPACE" ] || exit 0
-          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
-            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
-          fi
-          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
-          # every later checkout fails: start that repository again, checkout fetches it anew
-          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
-            echo "broken git data in the workspace: removing it"
-            rm -rf "$GITHUB_WORKSPACE/.git"
-          fi
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -192,19 +140,6 @@ jobs:
     if: ${{ needs.changes.outputs.passkeys == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
-      - name: Workspace owned by the runner account
-        run: |
-          [ -d "$GITHUB_WORKSPACE" ] || exit 0
-          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
-            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
-          fi
-          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
-          # every later checkout fails: start that repository again, checkout fetches it anew
-          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
-            echo "broken git data in the workspace: removing it"
-            rm -rf "$GITHUB_WORKSPACE/.git"
-          fi
       - uses: actions/checkout@v4
       - run: scripts/ci_sudo.sh
       - uses: actions/setup-python@v5
@@ -232,19 +167,6 @@ jobs:
     if: ${{ needs.changes.outputs.sftpgo == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
-      - name: Workspace owned by the runner account
-        run: |
-          [ -d "$GITHUB_WORKSPACE" ] || exit 0
-          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
-            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
-          fi
-          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
-          # every later checkout fails: start that repository again, checkout fetches it anew
-          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
-            echo "broken git data in the workspace: removing it"
-            rm -rf "$GITHUB_WORKSPACE/.git"
-          fi
       - uses: actions/checkout@v4
       - run: scripts/ci_sudo.sh
       - uses: actions/setup-python@v5
@@ -269,19 +191,6 @@ jobs:
     if: ${{ needs.changes.outputs.e2ee == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
-      - name: Workspace owned by the runner account
-        run: |
-          [ -d "$GITHUB_WORKSPACE" ] || exit 0
-          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
-            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
-          fi
-          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
-          # every later checkout fails: start that repository again, checkout fetches it anew
-          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
-            echo "broken git data in the workspace: removing it"
-            rm -rf "$GITHUB_WORKSPACE/.git"
-          fi
       - uses: actions/checkout@v4
       - run: scripts/ci_sudo.sh
       - uses: actions/setup-python@v5
