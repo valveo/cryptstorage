@@ -1,14 +1,10 @@
 name: Windows (own machine)
 
 # Runs the client on the Windows runner the maintainer set up (a VM), against the real test server.
-# Runs for pull requests that touch the client, and by hand from the Actions page (inputs pick a part).
-# The runner is the maintainer's own machine: it must never run code from a fork's pull request
-# (the job's `if` below). Before the repository goes public, check this again.
+# Started by hand only, from the Actions page (inputs pick a part); pull requests are tried on GitHub's
+# Windows machines (windows.yml). The runner is the maintainer's own machine: it never runs code from a
+# fork's pull request.
 on:
-  pull_request:
-    paths:
-      - "cryptclient/**"
-      - ".github/workflows/windows-selfhosted.yml"
   workflow_dispatch:
     inputs:
       elevated_only:

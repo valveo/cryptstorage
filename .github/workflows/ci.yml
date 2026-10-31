@@ -1,17 +1,13 @@
 name: CI
 
-# A push to a pull request's branch is covered by the pull_request run; running on both doubled the
-# hosted minutes (the free quota ran out in October 2026)
-#
-# All jobs run on the maintainer's self-hosted Linux runner, which is the LAN test server (made for this;
-# it can be reinstalled). Jobs that need root get sudo through scripts/ci_sudo.sh with the runner
-# account's password (secret LINUXSERVERSSH), and the integration test uses ports of its own so the
-# test server's API (8099) keeps running. The runner never runs a fork's pull request (the `if` on each
-# job); check this again before the repository goes public.
+# The jobs run on GitHub's own Linux machines (free for public repositories). Jobs that need root use
+# sudo, which needs no password there (scripts/ci_sudo.sh does nothing then; it is kept for running the
+# same jobs on a self-hosted runner). The integration test uses ports of its own.
 #
 # Pull requests only, not again after the merge: the merged branch was just tested as the pull request's
 # merge commit. Each job runs only when the pull request touches what it tests (job `changes`); the
-# secret scan always runs. Started by hand (Actions page), every job runs.
+# secret scan always runs. Started by hand (Actions page), every job runs. A pull request from a fork
+# runs only after the maintainer approves it (repository setting), and gets a read-only token.
 on:
   pull_request:
   workflow_dispatch:
@@ -34,7 +30,7 @@ jobs:
     # Which of the jobs below this pull request needs. A change to this file or to the Python
     # requirements runs them all.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     outputs:
       python: ${{ steps.f.outputs.python }}
       go: ${{ steps.f.outputs.go }}
@@ -85,7 +81,7 @@ jobs:
   python:
     needs: changes
     if: ${{ needs.changes.outputs.python == 'true' }}
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     steps:
       # A root step can leave files the runner cannot delete, and checkout then fails for every later job
       - name: Workspace owned by the runner account
@@ -118,7 +114,7 @@ jobs:
   go:
     needs: changes
     if: ${{ needs.changes.outputs.go == 'true' }}
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: cryptclient
@@ -159,7 +155,7 @@ jobs:
     # Only HEAD's history: --all also scanned other PRs' branches left in the self-hosted runner's
     # workspace, so one PR's finding failed every PR. Each branch is still scanned by its own run.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     # A scan takes seconds; a stuck one held the test server for minutes (2026-10-29)
     timeout-minutes: 10
     steps:
@@ -194,7 +190,7 @@ jobs:
     # Passkeys end to end: real API, PHP web UI, Chromium's virtual authenticator, the app's sign-in
     needs: changes
     if: ${{ needs.changes.outputs.passkeys == 'true' }}
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     steps:
       # A root step can leave files the runner cannot delete, and checkout then fails for every later job
       - name: Workspace owned by the runner account
@@ -234,7 +230,7 @@ jobs:
     # pinned host key, restart and restore
     needs: changes
     if: ${{ needs.changes.outputs.sftpgo == 'true' }}
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     steps:
       # A root step can leave files the runner cannot delete, and checkout then fails for every later job
       - name: Workspace owned by the runner account
@@ -271,7 +267,7 @@ jobs:
     # The whole encrypted-storage flow with the real parts: API, SFTPGo, sshfs, gocryptfs
     needs: changes
     if: ${{ needs.changes.outputs.e2ee == 'true' }}
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     steps:
       # A root step can leave files the runner cannot delete, and checkout then fails for every later job
       - name: Workspace owned by the runner account
