@@ -1,0 +1,68 @@
+name: Windows installer (own machine)
+
+# Builds CryptStorageSetup.exe on the maintainer's own Windows runner, for trying the installer by hand
+# when the GitHub-hosted job in windows.yml cannot run (it also installs it on a clean machine; this one
+# only builds). The runner account is an ordinary user, so Inno Setup is installed for that user only,
+# from its pinned official release. Same fork rule as windows-selfhosted.yml.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-installer-selfhosted.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: windows-selfhosted
+
+env:
+  INNO_URL: https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
+  INNO_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
+
+# The workflow's token can only read the repository (least privilege before the repository goes public)
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 20
+    env:
+      PSExecutionPolicyPreference: Bypass
+    defaults:
+      run:
+        shell: powershell
+        working-directory: cryptclient
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cryptclient/go.mod
+          cache: false
+      - name: Inno Setup for this user
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA "InnoSetup6-ci"
+          if (-not (Test-Path "$dir\ISCC.exe")) {
+            $exe = Join-Path $env:RUNNER_TEMP "innosetup.exe"
+            Invoke-WebRequest $env:INNO_URL -OutFile $exe -UseBasicParsing
+            $sum = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+            if ($sum -ne $env:INNO_SHA256) { throw "Inno Setup checksum mismatch: $sum" }
+            $p = Start-Process $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/CURRENTUSER","/DIR=$dir" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "Inno Setup install failed: $($p.ExitCode)" }
+          }
+          "ISCC=$dir\ISCC.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Build client and installer
+        run: |
+          go mod tidy
+          go run ./packaging/windows/winres -o rsrc_windows_amd64.syso
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          go build -ldflags="-s -w" -o packaging/windows/cryptclient.exe .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          go build -ldflags="-s -w -H=windowsgui" -o packaging/windows/CryptStorage.exe .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $ver = "0.0.0-" + "${{ github.sha }}".Substring(0, 7)
+          & $env:ISCC "/DAppVersion=$ver" packaging/windows/cryptstorage.iss
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CryptStorageSetup
+          path: cryptclient/packaging/windows/Output/CryptStorageSetup.exe

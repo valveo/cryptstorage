@@ -1,0 +1,67 @@
+# Redirect HTTP → HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ domain }};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name {{ domain }};
+
+    # SSL (managed by certbot)
+    ssl_certificate     /etc/letsencrypt/live/{{ domain }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ domain }}/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    # Security headers
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+    add_header X-Frame-Options            DENY                                  always;
+    add_header X-Content-Type-Options     nosniff                               always;
+    add_header Referrer-Policy            strict-origin-when-cross-origin       always;
+    add_header Permissions-Policy         "geolocation=(), microphone=()"       always;
+
+    # Logging
+    access_log /var/log/nginx/cryptstorage-access.log;
+    error_log  /var/log/nginx/cryptstorage-error.log;
+
+    # Web UI
+    location / {
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $remote_addr;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+    }
+
+{% if client_downloads_src | default('') %}
+    # Client downloads (roles/downloads). Inside a location add_header would drop the headers
+    # above, so none is set here.
+    location /download/ {
+        alias        {{ downloads_dir | default('/var/www/cryptstorage-downloads') }}/;
+        types        { text/html html; application/vnd.debian.binary-package deb; }
+        default_type application/octet-stream;
+    }
+
+{% endif %}
+    # API - separate path straight to FastAPI
+    location /api/ {
+        proxy_pass         http://127.0.0.1:8000/;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $remote_addr;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+
+        # Rate limiting for login
+        limit_req zone=login burst=10 nodelay;
+    }
+}
+
+# Rate limit zone (define in nginx.conf http block or here)
+# Limits to 10 requests per second per IP
+limit_req_zone $binary_remote_addr zone=login:10m rate=10r/s;

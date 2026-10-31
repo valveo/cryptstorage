@@ -1,0 +1,7 @@
+---
+# roles/ssl/handlers/main.yml
+
+- name: Reload nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded

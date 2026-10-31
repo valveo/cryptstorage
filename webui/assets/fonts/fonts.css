@@ -1,0 +1,14 @@
+/* Fonts served by this server (no requests to Google): DM Sans and Space Mono, latin subset,
+   from @fontsource 5.3.0. SIL Open Font License 1.1: see DM-Sans-OFL.txt and Space-Mono-OFL.txt. */
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 300; font-display: swap;
+  src: url(./dm-sans-latin-300-normal.woff2) format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(./dm-sans-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 500; font-display: swap;
+  src: url(./dm-sans-latin-500-normal.woff2) format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(./dm-sans-latin-700-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Space Mono'; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(./space-mono-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Space Mono'; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(./space-mono-latin-700-normal.woff2) format('woff2'); }

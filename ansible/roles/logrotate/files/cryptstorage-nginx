@@ -1,0 +1,12 @@
+/var/log/nginx/cryptstorage-*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    sharedscripts
+    postrotate
+        nginx -s reopen || true
+    endscript
+}

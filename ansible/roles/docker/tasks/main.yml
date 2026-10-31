@@ -1,0 +1,97 @@
+---
+# roles/docker/tasks/main.yml
+# Docker Engine + Docker Compose from Docker's own repository (Ubuntu or Debian)
+
+- name: Remove old Docker packages if present
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - docker-doc
+      - docker-compose
+      - podman-docker
+      - containerd
+      - runc
+    state: absent
+
+- name: Create the APT keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Add Docker GPG key
+  ansible.builtin.get_url:
+    url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
+    dest: /etc/apt/keyrings/docker.asc
+    mode: '0644'
+
+- name: Add Docker APT repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: "https://download.docker.com/linux/{{ ansible_distribution | lower }}"
+    suites: ["{{ ansible_distribution_release }}"]
+    components: [stable]
+    architectures: ["{{ docker_apt_arch[ansible_architecture] | default(ansible_architecture) }}"]
+    signed_by: /etc/apt/keyrings/docker.asc
+    state: present
+  vars:
+    docker_apt_arch: { x86_64: amd64, aarch64: arm64 }
+
+# Written by earlier versions of this role (apt_repository); apt warns about the duplicate
+- name: Remove the old one-line Docker source
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/docker.list
+    state: absent
+
+- name: Install Docker Engine and Compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    update_cache: true
+    state: present
+
+# Without this, connections to published ports (the per-user SSH containers) reach the
+# container from the docker-proxy's address, so logs and fail2ban would never see the
+# real client IP. Only written if the file does not exist yet.
+- name: Configure Docker daemon (client IPs preserved, log rotation)
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: |
+      {
+        "userland-proxy": false,
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "10m", "max-file": "3" }
+      }
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+
+- name: Enable and start Docker service
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+# The community.docker modules of the cryptstack role talk to the Docker API with requests;
+# nothing on the host needs the Docker SDK for Python any more.
+- name: Install python3-requests (for the community.docker modules)
+  ansible.builtin.apt:
+    name: python3-requests
+    state: present
+
+- name: Verify Docker is working
+  ansible.builtin.command: docker info
+  register: docker_info
+  changed_when: false
+
+- name: Print Docker version
+  ansible.builtin.debug:
+    msg: "Docker installed: {{ docker_info.stdout | regex_search('Server Version: (.+)', '\\1') | first }}"

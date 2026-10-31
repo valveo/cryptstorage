@@ -1,0 +1,122 @@
+---
+# roles/ssl/tasks/main.yml
+# Nginx reverse proxy + Let's Encrypt SSL
+
+# The HTTP-only configuration is needed only until the first certificate exists; on later
+# runs it would replace the HTTPS configuration for a moment and report a change every time.
+- name: Check for an existing certificate
+  ansible.builtin.stat:
+    path: /etc/letsencrypt/live/{{ domain }}/fullchain.pem
+  register: le_cert
+
+# A certificate restored from a backup (docs/BACKUP.md) arrives before nginx has any site file
+- name: Check for the nginx site
+  ansible.builtin.stat:
+    path: /etc/nginx/sites-available/cryptstorage
+  register: nginx_site
+
+- name: Deploy nginx configuration (HTTP only, before the first certificate)
+  when: not le_cert.stat.exists or not nginx_site.stat.exists
+  ansible.builtin.template:
+    src: nginx-http.conf.j2
+    dest: /etc/nginx/sites-available/cryptstorage
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload nginx
+
+- name: Enable nginx site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/cryptstorage
+    dest: /etc/nginx/sites-enabled/cryptstorage
+    state: link
+
+- name: Remove default nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Start and enable nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started
+
+- name: Reload nginx before certbot
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  when: not le_cert.stat.exists
+
+- name: Obtain Let's Encrypt certificate
+  ansible.builtin.command: >
+    certbot --nginx
+    -d {{ domain }}
+    --non-interactive
+    --agree-tos
+    --email {{ letsencrypt_email }}
+    --redirect
+    --reuse-key
+  args:
+    creates: /etc/letsencrypt/live/{{ domain }}/fullchain.pem
+  notify: Reload nginx
+
+# Renewals keep the private key (certbot --reuse-key) so the public-key pin in the clients
+# (CRYPTSTORAGE_CERT_PIN=sha256/...) survives every renewal. Also fixes certificates that
+# were issued without it.
+- name: Check for an existing renewal configuration
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/renewal/{{ domain }}.conf"
+  register: renewal_conf
+
+- name: Make renewals reuse the private key
+  ansible.builtin.lineinfile:
+    path: "/etc/letsencrypt/renewal/{{ domain }}.conf"
+    regexp: '^reuse_key\s*='
+    insertafter: '^\[renewalparams\]'
+    line: 'reuse_key = True'
+  when: renewal_conf.stat.exists
+
+- name: Compute the public-key pin of the server certificate
+  ansible.builtin.shell: |
+    set -o pipefail
+    openssl x509 -in /etc/letsencrypt/live/{{ domain }}/fullchain.pem -noout -pubkey \
+      | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64
+  args:
+    executable: /bin/bash
+  register: server_pin
+  changed_when: false
+
+- name: Show the pin clients should use
+  ansible.builtin.debug:
+    msg: >-
+      Client pin: CRYPTSTORAGE_CERT_PIN=sha256/{{ server_pin.stdout }}
+      (`cryptclient init-usb` stores it on the stick. Add a second pin, e.g. your CA's
+      intermediate, as a backup.)
+
+- name: Deploy final nginx HTTPS configuration
+  ansible.builtin.template:
+    src: nginx-https.conf.j2
+    dest: /etc/nginx/sites-available/cryptstorage
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload nginx
+
+- name: Set up automatic certificate renewal (cron)
+  ansible.builtin.cron:
+    name: certbot-renew
+    minute: "0"
+    hour: "3"
+    day: "*/7"
+    job: certbot renew --quiet --reuse-key --post-hook "systemctl reload nginx"
+    user: root
+
+- name: Test nginx configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+# The verify role checks HTTPS next: the reload must have happened by then
+- name: Apply the nginx configuration now
+  ansible.builtin.meta: flush_handlers

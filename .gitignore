@@ -1,0 +1,17 @@
+*.zip
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+dist/
+# Windows resources (icon, version), made by cryptclient/packaging/windows/winres at build time
+*.syso
+/tmp/
+# Build version written by the deploy (scripts/version.sh)
+BUILD_VERSION
+# Copies made by ansible/setup-files.sh
+/ansible/roles/cryptdaemon/files/cryptdaemon/
+/ansible/roles/cryptstack/files/api/
+/ansible/roles/cryptstack/files/webui/
+/ansible/roles/cryptstack/files/backup.sh

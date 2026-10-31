@@ -1,0 +1,100 @@
+---
+# site.yml - CryptStorage server installation playbook
+# Target: Ubuntu 24.04 or newer, Debian 12 or newer
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml site.yml
+#
+# Single role:
+#   ansible-playbook -i inventory/hosts.yml site.yml --tags base
+#   ansible-playbook -i inventory/hosts.yml site.yml --tags daemon
+#   ansible-playbook -i inventory/hosts.yml site.yml --tags docker
+#   ansible-playbook -i inventory/hosts.yml site.yml --tags ssl
+#   ansible-playbook -i inventory/hosts.yml site.yml --tags firewall
+
+- name: CryptStorage - Full server setup
+  hosts: cryptstorage
+  become: true
+
+  pre_tasks:
+    - name: Supported operating system
+      ansible.builtin.assert:
+        that:
+          - >-
+            (ansible_distribution == 'Ubuntu' and ansible_distribution_major_version | int >= 24) or
+            (ansible_distribution == 'Debian' and ansible_distribution_major_version | int >= 12)
+        fail_msg: >-
+          {{ ansible_distribution }} {{ ansible_distribution_version }} is not supported.
+          Use Ubuntu 24.04 or newer, or Debian 12 or newer.
+        quiet: true
+      tags: [always]
+
+    # The inventory ships with CHANGE_ME placeholders. Deploying with them would give
+    # every installation the same "secrets" (and the API now refuses to start with them).
+    - name: Refuse to deploy placeholder or weak secrets
+      ansible.builtin.assert:
+        that:
+          - "'CHANGE_ME' not in (item.value | string)"
+          - (item.value | string | length) >= item.min
+        fail_msg: >-
+          {{ item.name }} is still a placeholder or shorter than {{ item.min }} characters.
+          Generate real values with ./generate-secrets.sh (and keep them in Ansible Vault).
+        quiet: true
+      loop:
+        - { name: db_root_password, value: "{{ db_root_password }}", min: 16 }
+        - { name: db_password, value: "{{ db_password }}", min: 16 }
+        - { name: jwt_secret_key, value: "{{ jwt_secret_key }}", min: 32 }
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [always]
+
+    - name: refresh_token_hmac_key must be 64 hex characters
+      ansible.builtin.assert:
+        that:
+          - refresh_token_hmac_key | string is match('^[0-9a-fA-F]{64}$')
+        fail_msg: "refresh_token_hmac_key must be 64 hex characters. Generate it with: openssl rand -hex 32"
+        quiet: true
+      tags: [always]
+
+    - name: totp_encryption_key must be 64 hex characters
+      ansible.builtin.assert:
+        that:
+          - totp_encryption_key | string is match('^[0-9a-fA-F]{64}$')
+        fail_msg: "totp_encryption_key must be 64 hex characters. Generate it with: openssl rand -hex 32"
+        quiet: true
+      tags: [always]
+
+  roles:
+    - role: base
+      tags: base
+
+    - role: firewall
+      tags: firewall
+
+    - role: fail2ban
+      tags: fail2ban
+
+    - role: docker
+      tags: docker
+
+    # also with --tags stack: the compose file needs the facts this role reads (daemon auth key,
+    # SFTPGo admin password, storage account)
+    - role: cryptdaemon
+      tags: [daemon, stack]
+
+    - role: cryptstack
+      tags: stack
+
+    - role: ssl
+      tags: ssl
+
+    # Optional: https://<domain>/download/ offers the client (client_downloads_src)
+    - role: downloads
+      tags: downloads
+      when: client_downloads_src | default('') | length > 0
+
+    - role: logrotate
+      tags: logrotate
+
+    - role: verify
+      tags: verify

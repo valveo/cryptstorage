@@ -1,0 +1,20 @@
+# /etc/udev/rules.d/70-cryptclient.rules
+#
+# When a USB stick is plugged in, the user's systemd starts cryptstorage-tray@<device>.service, which asks
+# for the password in a dialog and opens the storage. Two kinds of stick:
+#   1. The key in the stick's hidden .secdisk folder (sticks prepared now, on Linux or Windows). The rule
+#      cannot look into files before the desktop mounts the stick, so the service is started for every
+#      USB partition with a file system; it waits for the mount and stops without a word when the
+#      folder is not there.
+#   2. The key in raw sectors (sticks prepared on Linux by older versions): `cryptclient check-device`
+#      reads the marker, as root, here; the user at the seat may then read and write the stick's raw
+#      key area without root (uaccess; that is why this file sorts before 73-seat-late.rules).
+#
+# Installation: sudo ./install-udev.sh
+
+ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", \
+    TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="cryptstorage-tray@%k.service"
+
+ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ENV{ID_BUS}=="usb", \
+    PROGRAM=="/usr/local/bin/cryptclient check-device $devnode", \
+    TAG+="uaccess", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="cryptstorage-tray@%k.service"

@@ -1,0 +1,4 @@
+# Do not commit local settings and passwords
+inventory/hosts.local.yml
+*.retry
+.vault_pass

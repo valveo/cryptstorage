@@ -1,0 +1,101 @@
+---
+# roles/cryptdaemon/tasks/main.yml
+# Installs and starts the host-level cryptdaemon service (manages the users of the SFTPGo storage service)
+
+# The system account the daemon and the SFTPGo container run as (everything below needs it)
+- name: Storage account
+  ansible.builtin.include_tasks: account.yml
+
+# The shared HMAC key must exist before the service starts, and is exposed to the
+# cryptstack role as the fact "daemon_auth_key" (it goes to the API container's env).
+- name: Generate / load daemon auth key
+  ansible.builtin.include_tasks: authkey.yml
+
+# Group that may connect to the daemon socket (the API container joins it via group_add)
+# Admin password of the SFTPGo REST API (created once; the compose file gives it to the SFTPGo container,
+# the daemon reads it from the file). Exposed as the fact "sftpgo_admin_password".
+- name: Generate / load the SFTPGo admin password
+  ansible.builtin.include_tasks: sftpgo_admin.yml
+
+# Storage and SFTPGo state directories and the SFTP host keys (also run alone by the CI test of
+# the SFTPGo container: ansible/tests/sftpgo-container.yml)
+- name: Prepare the SFTPGo storage and state
+  ansible.builtin.include_tasks: sftpgo_state.yml
+
+- name: Create cryptapi group
+  ansible.builtin.group:
+    name: cryptapi
+    gid: "{{ cryptapi_gid | default(3000) }}"
+    system: true
+
+- name: Create cryptdaemon directory
+  ansible.builtin.file:
+    path: "{{ install_dir }}/cryptdaemon"
+    state: directory
+    owner: root
+    group: cryptstorage
+    mode: '0750'
+
+- name: Copy cryptdaemon source files
+  ansible.builtin.copy:
+    src: "cryptdaemon/{{ item.name }}"
+    dest: "{{ install_dir }}/cryptdaemon/"
+    owner: root
+    group: cryptstorage
+    mode: "{{ item.mode | default('0640') }}"
+  loop:
+    - { name: daemon.py, mode: '0750' }
+    - { name: handler.py }
+    - { name: validator.py }
+    - { name: socket_auth.py }
+    - { name: sftpgo_client.py }
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create cryptdaemon log file
+  ansible.builtin.file:
+    path: /var/log/cryptdaemon.log
+    state: touch
+    owner: cryptstorage
+    group: root
+    mode: '0640'
+    access_time: preserve
+    modification_time: preserve
+
+- name: Deploy cryptdaemon systemd service
+  ansible.builtin.template:
+    src: cryptdaemon.service.j2
+    dest: /etc/systemd/system/cryptdaemon.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart cryptdaemon
+
+- name: Enable and start cryptdaemon
+  ansible.builtin.systemd:
+    name: cryptdaemon
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for cryptdaemon socket to appear
+  ansible.builtin.wait_for:
+    path: /run/cryptdaemon/cryptdaemon.sock
+    timeout: 15
+
+# The daemon creates the socket itself (cryptstorage:cryptapi 0660 inside a 0750 directory).
+# Check, don't change: a file task here would silently undo the daemon's setting.
+- name: Read cryptdaemon socket permissions
+  ansible.builtin.stat:
+    path: /run/cryptdaemon/cryptdaemon.sock
+  register: daemon_sock
+
+- name: Assert cryptdaemon socket permissions
+  ansible.builtin.assert:
+    that:
+      - daemon_sock.stat.mode == '0660'
+      - daemon_sock.stat.gr_name == 'cryptapi'
+      - daemon_sock.stat.uid == (storage_account_uid | int)
+    fail_msg: "cryptdaemon socket must be cryptstorage:cryptapi 0660 (the daemon must not run as root)"

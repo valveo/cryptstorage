@@ -1,0 +1,43 @@
+name: Pilot or tester interest
+description: You would like to try CryptStorage in your organisation or community, or test it yourself
+labels: [pilot]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        CryptStorage is a pre-release looking for testers and pilot organisations (about 5–20 people).
+        This issue is public: share only what you are happy for others to read.
+  - type: dropdown
+    id: who
+    attributes:
+      label: Who would use it
+      options:
+        - Just me
+        - A company
+        - An association or community
+        - A public-sector organisation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: size
+    attributes:
+      label: About how many users
+  - type: checkboxes
+    id: platforms
+    attributes:
+      label: Computers the users have
+      options:
+        - label: Windows
+        - label: Linux
+        - label: macOS
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need it for
+      description: What you use today, and what you would like CryptStorage to solve (shared folders, offline use, phone access...).
+  - type: textarea
+    id: hosting
+    attributes:
+      label: Where it would run
+      description: Your own server, a VPS (which country?), or not decided yet.

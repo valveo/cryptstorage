@@ -1,0 +1,69 @@
+---
+# roles/cryptdaemon/tasks/sftpgo_state.yml
+
+# Data owned by another uid: from before 2026-10-29 (the container ran as uid 1000) or restored from a
+# backup made on another host. Hand it to the account; only the top directory is checked, so a normal
+# run does not walk the whole storage.
+- name: Owner of existing storage and SFTPGo state
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ storage_dir | default('/srv/cryptstorage') }}"
+    - "{{ install_dir }}/sftpgo"
+  register: storage_owner
+
+- name: Move existing storage and SFTPGo state to the storage account
+  ansible.builtin.command: chown -R {{ storage_account_uid }}:{{ storage_account_gid }} -- "{{ item.item }}"
+  loop: "{{ storage_owner.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists and (item.stat.uid != (storage_account_uid | int) or item.stat.gid != (storage_account_gid | int))
+
+- name: Create the data directory of the encrypted storage
+  ansible.builtin.file:
+    path: "{{ storage_dir | default('/srv/cryptstorage') }}"
+    state: directory
+    owner: cryptstorage
+    group: cryptstorage
+    mode: '0755'
+
+- name: Create the state directory of the SFTPGo container (user database, SSH host keys)
+  ansible.builtin.file:
+    path: "{{ install_dir }}/sftpgo"
+    state: directory
+    owner: cryptstorage
+    group: cryptstorage
+    mode: '0700'
+
+# SFTPGo would create these at its first start; creating them here first lets the API container
+# mount the public halves (docker would turn a missing bind-mount source into a directory).
+# Existing keys are kept: clients have pinned them. The API hands the public keys to the client
+# over the pinned TLS connection, so nobody is asked to trust an unknown key.
+- name: Create the SSH host keys of the SFTP service (kept if they exist)
+  ansible.builtin.shell: |
+    set -e
+    k={{ install_dir }}/sftpgo/{{ item.name }}
+    [ -f "$k" ] || ssh-keygen -q {{ item.args }} -N '' -f "$k" </dev/null
+    [ -f "$k.pub" ] || ssh-keygen -y -f "$k" > "$k.pub"
+  args:
+    creates: "{{ install_dir }}/sftpgo/{{ item.name }}.pub"
+  loop:
+    - { name: id_rsa, args: "-t rsa -b 4096" }
+    - { name: id_ecdsa, args: "-t ecdsa -b 256" }
+    - { name: id_ed25519, args: "-t ed25519" }
+
+- name: Private host keys belong to the SFTPGo user only
+  ansible.builtin.file:
+    path: "{{ install_dir }}/sftpgo/{{ item }}"
+    owner: cryptstorage
+    group: cryptstorage
+    mode: '0600'
+  loop: [id_rsa, id_ecdsa, id_ed25519]
+
+- name: Public host keys are readable by the API container
+  ansible.builtin.file:
+    path: "{{ install_dir }}/sftpgo/{{ item }}.pub"
+    owner: cryptstorage
+    group: cryptstorage
+    mode: '0644'
+  loop: [id_rsa, id_ecdsa, id_ed25519]

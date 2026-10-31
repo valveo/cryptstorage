@@ -1,0 +1,7 @@
+---
+# roles/base/handlers/main.yml
+
+- name: Reload ssh
+  ansible.builtin.systemd:
+    name: ssh
+    state: reloaded

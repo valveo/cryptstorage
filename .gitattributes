@@ -1,0 +1,3 @@
+# Shell scripts, Dockerfiles and templates must keep LF line endings even when cloned on
+# Windows (core.autocrlf=true would break them on the server)
+* text=auto eol=lf

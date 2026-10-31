@@ -1,0 +1,144 @@
+name: Release
+
+# Builds the client from a version tag (vX.Y.Z), publishes SHA256SUMS signed with a keyless sigstore/cosign
+# signature, and creates a DRAFT pre-release with everything attached. Nothing is published until the
+# maintainer reviews the draft. Run it by hand (workflow_dispatch) for a dry run: same build and signature,
+# artifacts only, no release. How users verify: docs/verify-release.md. No paid certificates.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version for the dry run (no release is created)"
+        default: "0.0.0-dryrun"
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="${{ github.event.inputs.version }}"; fi
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "bad version: $v"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  linux:
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cryptclient/go.mod
+          cache: false
+      - name: Binaries and .deb
+        working-directory: cryptclient
+        run: |
+          go mod tidy
+          mkdir -p ../dist
+          go run ./packaging/windows/winres -version "$VERSION" -o rsrc_windows_amd64.syso
+          for t in linux/amd64 linux/arm64 windows/amd64; do
+            os=${t%/*}; arch=${t#*/}; ext=; [ "$os" = windows ] && ext=.exe
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w -X main.Version=$VERSION" \
+              -o "../dist/cryptclient-$VERSION-$os-$arch$ext" .
+          done
+          # the same program as a window program: the tray (CryptStorage.exe)
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -H=windowsgui -X main.Version=$VERSION" \
+            -o "../dist/CryptStorage-$VERSION-windows-amd64.exe" .
+          bash packaging/linux/build-deb.sh "$VERSION"
+          cp packaging/linux/dist/deb/*.deb ../dist/
+          "../dist/cryptclient-$VERSION-linux-amd64" version | grep -qF "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cryptclient/go.mod
+          cache: false
+      - name: Installer
+        working-directory: cryptclient
+        run: |
+          go mod tidy
+          $env:CGO_ENABLED = "0"
+          go run ./packaging/windows/winres -version $env:VERSION -o rsrc_windows_amd64.syso
+          go build -trimpath -ldflags="-s -w -X main.Version=$env:VERSION" -o packaging/windows/cryptclient.exe .
+          go build -trimpath -ldflags="-s -w -H=windowsgui -X main.Version=$env:VERSION" -o packaging/windows/CryptStorage.exe .
+          choco install innosetup -y --no-progress | Out-Null
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$env:VERSION packaging/windows/cryptstorage.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          New-Item -ItemType Directory -Force ../dist | Out-Null
+          Copy-Item packaging/windows/Output/CryptStorageSetup.exe "../dist/CryptStorageSetup-$env:VERSION.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/
+
+  publish:
+    needs: [version, linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # the draft release
+      id-token: write     # keyless signing: the certificate names this workflow and the tag
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      # The signing certificate (repository, workflow, ref) goes into the PUBLIC Rekor log. A dry run in a
+      # private repository therefore skips signing; a tag means a release is intended anyway.
+      - uses: sigstore/cosign-installer@v3
+        if: ${{ !github.event.repository.private || github.ref_type == 'tag' }}
+      - name: Sign SHA256SUMS (keyless; recorded in the public Rekor log)
+        if: ${{ !github.event.repository.private || github.ref_type == 'tag' }}
+        working-directory: dist
+        run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+      - name: Check the signature as a user would
+        if: ${{ !github.event.repository.private || github.ref_type == 'tag' }}
+        working-directory: dist
+        run: |
+          cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ env.VERSION }}
+          path: dist/
+      - name: Checksums without a signature (dry run in a private repository)
+        if: ${{ github.event.repository.private && github.ref_type != 'tag' }}
+        working-directory: dist
+        run: sha256sum -c SHA256SUMS
+      - name: Draft pre-release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft --prerelease \
+            --title "CryptStorage $VERSION" \
+            --notes "Pre-release, not independently audited. Verify the download first: docs/verify-release.md"

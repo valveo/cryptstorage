@@ -1,0 +1,179 @@
+name: Windows (own machine)
+
+# Runs the client on the Windows runner the maintainer set up (a VM), against the real test server.
+# Runs for pull requests that touch the client, and by hand from the Actions page (inputs pick a part).
+# The runner is the maintainer's own machine: it must never run code from a fork's pull request
+# (the job's `if` below). Before the repository goes public, check this again.
+on:
+  pull_request:
+    paths:
+      - "cryptclient/**"
+      - ".github/workflows/windows-selfhosted.yml"
+  workflow_dispatch:
+    inputs:
+      elevated_only:
+        description: "Only try the administrator warning (needs the runner account to be allowed to elevate)"
+        default: "false"
+      usb_probe:
+        description: "Only look at the disks (read only): which one is the USB stick and how it is laid out"
+        default: "false"
+      usb_test:
+        description: "Try the key on the USB stick (writes and removes the folder .secdisk on it)"
+        default: "false"
+      api_url:
+        description: "API address of the test server (empty: the repository variable TEST_API_URL)"
+        default: ""
+
+# one machine: a second run waits instead of fighting over drive letters and processes
+concurrency:
+  group: windows-selfhosted
+
+jobs:
+  selfhosted:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    env:
+      # a fresh Windows client refuses to run .ps1 files (policy Restricted); this lifts it for the job
+      PSExecutionPolicyPreference: Bypass
+    defaults:
+      run:
+        shell: powershell
+        working-directory: cryptclient
+    steps:
+      # Both runner VMs share one hard disk on the maintainer's machine. When the Linux CI and this job ran
+      # at the same time, the disk could not keep up and the test server hung (2026-10-29). So this job
+      # waits until the CI run for the same commit has finished (at most 30 minutes, then it goes on).
+      - name: Wait for the Linux CI run of this commit
+        if: ${{ github.event_name == 'pull_request' }}
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $h = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
+          $url = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$env:HEAD_SHA&per_page=50"
+          $deadline = (Get-Date).AddMinutes(30)
+          $said = $false
+          while ($true) {
+            try {
+              $runs = (Invoke-RestMethod -Headers $h -Uri $url).workflow_runs
+            } catch {
+              Write-Host "::warning::Could not ask GitHub about the CI run ($($_.Exception.Message)); not waiting"
+              break
+            }
+            $busy = @($runs | Where-Object { $_.path -like ".github/workflows/ci.yml*" -and $_.status -ne "completed" })
+            if ($busy.Count -eq 0) { break }
+            if ((Get-Date) -gt $deadline) {
+              Write-Host "::warning::The Linux CI run is still $($busy[0].status) after 30 minutes; going on"
+              break
+            }
+            if (-not $said) { Write-Host "Waiting for the Linux CI run ($($busy[0].html_url))"; $said = $true }
+            Start-Sleep -Seconds 20
+          }
+      - uses: actions/checkout@v4
+      - name: Who runs this
+        run: |
+          $ErrorActionPreference = "Continue"
+          $m = @()
+          try { $m += "user=" + [Environment]::UserName } catch { $m += "user?" }
+          try { $m += "admin=" + ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } catch { $m += "admin? " + $_.Exception.Message }
+          try { $m += "os=" + [Environment]::OSVersion.VersionString } catch { $m += "os?" }
+          try { $m += "ps=" + $PSVersionTable.PSVersion } catch { $m += "ps?" }
+          $g = Get-Command go -ErrorAction SilentlyContinue
+          if ($g) { $m += "go=found" } else { $m += "go=missing" }
+          Write-Host ("::notice title=machine::" + ($m -join " | "))
+          exit 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cryptclient/go.mod
+          cache: false
+      - run: go mod tidy
+      - run: |
+          go run ./packaging/windows/winres -o rsrc_windows_amd64.syso
+          go build -o cryptclient.exe .
+          go build -ldflags="-H=windowsgui" -o CryptStorage.exe .
+      - name: Unit tests
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          go vet ./...
+          go test -count=1 ./... 2>&1 | Tee-Object ..\unit.log
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: USB stick (read only)
+        if: ${{ github.event.inputs.usb_probe == 'true' }}
+        continue-on-error: true
+        run: |
+          $o = @()
+          $o += (Get-Disk | Select-Object Number,BusType,FriendlyName,SerialNumber,Size,PartitionStyle,IsBoot,IsSystem | Format-Table -AutoSize | Out-String -Width 200)
+          foreach ($d in Get-Disk | Where-Object { $_.BusType -eq "USB" }) {
+            $o += "USB disk $($d.Number):"
+            $o += (Get-Partition -DiskNumber $d.Number -ErrorAction SilentlyContinue | Select-Object PartitionNumber,DriveLetter,Offset,Size,Type | Format-Table -AutoSize | Out-String -Width 200)
+          }
+          $o += (Get-CimInstance Win32_DiskDrive | Select-Object DeviceID,InterfaceType,MediaType,PNPDeviceID | Format-List | Out-String -Width 200)
+          $t = ($o -join "`n") -replace '%','%25' -replace "`r","" -replace "`n",'%0A'
+          if ($t.Length -gt 3500) { $t = $t.Substring(0,3500) }
+          Write-Host "::notice title=usbprobe::$t"
+      - name: USB stick test
+        if: ${{ github.event.inputs.usb_test == 'true' }}
+        working-directory: cryptclient
+        env:
+          CRYPTSTORAGE_IT_USB: "1"
+        run: |
+          go test -count=1 -v -run RealStick ./usb 2>&1 | Tee-Object ..\usb.log
+      - name: Administrator warning
+        if: ${{ github.event.inputs.elevated_only == 'true' }}
+        continue-on-error: true
+        run: |
+          # run directly: when the runner account is already an administrator the warning must show
+          $t = (& .\cryptclient.exe init-storage 2>&1 | Out-String) + "exit=" + $LASTEXITCODE
+          $t = $t -replace '%','%25' -replace "`r","" -replace "`n",'%0A'
+          Write-Host "::notice title=elevate::$t"
+      - name: Stop here when only the warning was asked
+        if: ${{ github.event.inputs.elevated_only == 'true' }}
+        run: exit 0
+      - name: Install dependencies and diagnose
+        if: ${{ github.event.inputs.elevated_only != 'true' && github.event.inputs.usb_probe != 'true' && github.event.inputs.usb_test != 'true' }}
+        run: |
+          .\cryptclient.exe install-deps --yes 2>&1 | Tee-Object ..\deps.log
+          .\cryptclient.exe diagnose 2>&1 | Tee-Object ..\diag.log
+        continue-on-error: true
+      - name: Clear leftovers of earlier runs
+        if: ${{ github.event.inputs.elevated_only != 'true' && github.event.inputs.usb_probe != 'true' && github.event.inputs.usb_test != 'true' }}
+        continue-on-error: true
+        run: |
+          $rows = @()
+          foreach ($n in "cppcryptfs","cppcryptfsctl","sshfs","ssh","sshfs-win") {
+            foreach ($p in Get-Process -Name $n -ErrorAction SilentlyContinue) {
+              $o = (Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue)
+              $who = ""; try { $r = Invoke-CimMethod -InputObject $o -MethodName GetOwner; $who = $r.User } catch {}
+              $rows += "$n pid=$($p.Id) owner=$who session=$($p.SessionId)"
+              Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+          $drives = (Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name }) -join ","
+          Write-Host ("::notice title=leftovers::killed: " + ($rows -join " ; ") + " | drives: " + $drives)
+      - name: Full chain against the test server
+        if: ${{ github.event.inputs.elevated_only != 'true' && github.event.inputs.usb_probe != 'true' && github.event.inputs.usb_test != 'true' }}
+        env:
+          # a pull request uses the test server on the same LAN as the runner
+          CRYPTSTORAGE_IT_URL: ${{ github.event.inputs.api_url || vars.TEST_API_URL }}
+        run: |
+          # -p 1: one package at a time. They share the one cppcryptfs instance of the machine, and a test that
+          # ends tells it to exit while another is starting it ("cppcryptfs did not start")
+          go test -count=1 -p 1 -v -run Integration ./volume ./setup ./syncer 2>&1 | Tee-Object ..\it.log
+          if (-not (Select-String -Path ..\it.log -SimpleMatch "ok  ")) { exit 1 }
+          if (Select-String -Path ..\it.log -Pattern "^(--- )?FAIL") { exit 1 }
+          # the ciphertext must be mounted at a hidden folder, not at a drive letter the user sees
+          if (Select-String -Path ..\it.log -SimpleMatch "using a drive letter") { exit 1 }
+      - name: Report
+        if: always()
+        run: |
+          $t = ""
+          foreach ($f in "unit.log","usb.log","deps.log","diag.log","it.log") { if (Test-Path ..\$f) { $t += "== $f`n" + ((Get-Content ..\$f -Tail 25) -join "`n") + "`n" } }
+          if (Test-Path ..\it.log) { $t += "== it.log (errors)`n" + ((Select-String -Path ..\it.log -Pattern "_test.go|FAIL|rror|denied|refused" | Select-Object -First 12 | ForEach-Object { $_.Line.Trim() }) -join "`n") + "`n" }
+          if ($t.Length -gt 3500) { $t = $t.Substring(0,1200) + "`n...`n" + $t.Substring($t.Length-2200) }
+          $t = $t -replace '%','%25' -replace "`r","" -replace "`n",'%0A'
+          "::notice title=selfhosted::$t"

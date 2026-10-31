@@ -1,0 +1,115 @@
+name: Deploy test server
+# Installs the CryptStorage end-to-end test server (scripts/deploy_testserver.sh) on the Linux test machine,
+# then runs the client's integration tests against it. Both jobs run on the self-hosted runner, which IS
+# the test machine (no hosted minutes, no SSH): sudo gets the runner account's password from the secret
+# LINUXSERVERSSH through scripts/ci_sudo.sh.
+#
+# Web UI over HTTPS for passkey tests with a phone: run this workflow by hand with https_domain set to
+# a DuckDNS name, with the DuckDNS token in the repository secret DUCKDNS_TOKEN. The server keeps the name
+# for later runs. See scripts/testserver_https.sh.
+on:
+  workflow_dispatch:
+    inputs:
+      server_host:
+        description: "Name or address clients use to reach the server (returned by the API as ssh_host; empty: the repository variable TEST_SERVER_HOST)"
+        default: ""
+      https_domain:
+        description: "Optional DuckDNS name for the HTTPS web UI, e.g. mytest.duckdns.org (empty: keep the current one)"
+        default: ""
+      show_logs:
+        description: "Only show the server's recent API log and sign-in events (no install)"
+        type: boolean
+        default: false
+      reset_data:
+        description: "Start from empty: remove all accounts, SFTP users and stored files (kept aside on the server)"
+        type: boolean
+        default: false
+  push:
+    paths:
+      - ".github/workflows/deploy-testserver.yml"
+      - "scripts/deploy_testserver.sh"
+      - "scripts/testserver_https.sh"
+      - "scripts/e2ee_testserver.py"
+      - "scripts/install_sftpgo.sh"
+
+env:
+  SUDO_PASSWORD: ${{ secrets.LINUXSERVERSSH }}
+  SERVER_HOST: ${{ github.event.inputs.server_host || vars.TEST_SERVER_HOST }}
+  SFTP_PORT: "2223"
+  API_PORT: "8099"
+
+# The runner is shared with CI; never two deploys at once
+concurrency:
+  group: deploy-testserver
+  cancel-in-progress: false
+
+# The workflow's token can only read the repository (least privilege before the repository goes public)
+permissions:
+  contents: read
+
+jobs:
+  logs:
+    if: ${{ github.event.inputs.show_logs == 'true' }}
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/ci_sudo.sh
+      - name: API log and recent sign-in events
+        run: |
+          sudo journalctl -u cryptstorage-api --since "-3 hours" --no-pager | grep -v -i "code for" | tail -150
+          sudo grep -E '^(BASE_URL|WEBAUTHN_[A-Z_]+|REQUIRED_FACTORS)=' /etc/cryptstorage/api.settings || true
+          sudo /opt/cryptstorage/venv/bin/python scripts/testserver_events.py /var/lib/cryptstorage/db.sqlite
+
+  deploy:
+    if: ${{ github.event.inputs.show_logs != 'true' }}
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 25
+    steps:
+      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
+      - name: Workspace owned by the runner account
+        run: |
+          [ -d "$GITHUB_WORKSPACE" ] || exit 0
+          [ -z "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ] && exit 0
+          printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v4
+      - run: scripts/ci_sudo.sh
+      - name: Install on this machine
+        env:
+          HTTPS_DOMAIN: ${{ github.event.inputs.https_domain }}
+          DUCKDNS_TOKEN: ${{ secrets.DUCKDNS_TOKEN }}
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /opt/cryptstorage/src
+          sudo find /opt/cryptstorage/src -mindepth 1 -delete
+          scripts/version.sh | tee api/BUILD_VERSION webui/BUILD_VERSION
+          sudo cp -r api cryptdaemon scripts webui /opt/cryptstorage/src/
+          # the token goes through a root-only file, never on a command line
+          if [ -n "$DUCKDNS_TOKEN" ]; then
+            sudo sh -c 'umask 077; cat > /tmp/cryptstorage-duckdns.env' <<< "DUCKDNS_TOKEN=$DUCKDNS_TOKEN"
+          fi
+          sudo env SERVER_HOST="$SERVER_HOST" SFTP_PORT="$SFTP_PORT" API_PORT="$API_PORT" HTTPS_DOMAIN="$HTTPS_DOMAIN" \
+            RESET_DATA="${{ github.event.inputs.reset_data == 'true' && '1' || '0' }}" \
+            SRC=/opt/cryptstorage/src bash /opt/cryptstorage/src/scripts/deploy_testserver.sh
+
+  verify:
+    needs: deploy
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/ci_sudo.sh
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cryptclient/go.mod
+      - name: Client integration tests against the deployed server
+        run: |
+          curl -sf "http://$SERVER_HOST:$API_PORT/server-info"
+          cd cryptclient && go mod tidy
+          CRYPTSTORAGE_IT_URL=http://$SERVER_HOST:$API_PORT CRYPTSTORAGE_IT_STICK_SECRETS=1 go test -count=1 -v -run Integration ./volume ./setup
+      - name: Server side, when the tests failed
+        if: failure()
+        run: |
+          gocryptfs -version; sshfs --version 2>&1 | head -2; mount | grep -E 'fuse' || true
+          sudo journalctl -u sftpgo -u cryptstorage-api --since "-20 min" --no-pager | tail -150
+          sudo find /srv/cryptstorage -newermt "-20 min" -printf '%M %u %s %p\n' | tail -60
+          sudo sed -n 's/^\(SFTPGO_COMMON\|SFTPGO_SFTPD\)/&/p' /etc/sftpgo/sftpgo.env

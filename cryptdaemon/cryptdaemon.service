@@ -1,0 +1,32 @@
+[Unit]
+Description=CryptDaemon - creates the SFTP accounts that hold users' ciphertext
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/cryptdaemon/daemon.py
+Restart=on-failure
+RestartSec=5
+User=cryptstorage
+Group=cryptstorage
+SupplementaryGroups=3000
+RuntimeDirectory=cryptdaemon
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+Environment=CRYPTDAEMON_SOCKET_GID=3000
+
+# Logging
+# The daemon writes its log file itself; its stdout copy goes to the journal only
+StandardOutput=journal
+StandardError=append:/var/log/cryptdaemon.log
+
+# Security hardening
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/srv/cryptstorage -/var/log/cryptdaemon.log
+ProtectHome=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

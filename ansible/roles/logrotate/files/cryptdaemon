@@ -1,0 +1,14 @@
+/var/log/cryptdaemon.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    # /var/log is root:syslog 0775 on Ubuntu; without su logrotate skips the file
+    su root root
+    notifempty
+    create 0640 cryptstorage root
+    postrotate
+        systemctl kill -s HUP cryptdaemon || true
+    endscript
+}

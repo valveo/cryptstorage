@@ -1,0 +1,14 @@
+# Direct dependencies, pinned to the versions the test suite runs against.
+# Update deliberately (and run `pip-audit -r api/requirements.txt`), not by accident.
+fastapi==0.143.3
+uvicorn[standard]==0.54.0
+sqlalchemy==2.1.5
+pymysql==1.2.3          # MariaDB/MySQL driver
+cryptography==50.0.2    # AES-GCM, scrypt
+PyJWT==2.15.1        # JWT tokens (replaces python-jose)
+argon2-cffi==25.1.0     # password hashing (replaces passlib)
+bcrypt==4.0.1           # verifies legacy bcrypt hashes only
+pydantic[email]==2.14.1
+email-validator==2.3.0
+slowapi==0.1.10
+webauthn==3.0.1          # passkeys (py_webauthn, BSD-3-Clause)

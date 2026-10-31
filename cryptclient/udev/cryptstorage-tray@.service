@@ -1,0 +1,18 @@
+# /usr/lib/systemd/user/cryptstorage-tray@.service
+#
+# Started by the udev rule (70-cryptclient.rules) when a USB stick is inserted, with the device
+# name as the instance (cryptstorage-tray@sdb.service). Removing the stick disconnects and ends the service.
+# Log: journalctl --user -u 'cryptstorage-tray@*'
+#
+# The server address and other settings go in ~/.config/cryptstorage/env, e.g.
+#   CRYPTSTORAGE_SERVER=https://storage.example.com
+
+[Unit]
+Description=CryptStorage: open the storage from the key stick %I
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=CRYPTCLIENT_DEVICE=/dev/%I
+EnvironmentFile=-%h/.config/cryptstorage/env
+ExecStart=/usr/local/bin/cryptclient tray --auto-connect

@@ -1,0 +1,40 @@
+---
+# Generate the SFTPGo admin password if it does not exist yet
+
+- name: Create cryptdaemon config dir
+  ansible.builtin.file:
+    path: /etc/cryptdaemon
+    state: directory
+    owner: root
+    group: cryptstorage       # the daemon runs as the storage account, not as root
+    mode: '0750'
+
+- name: Check if the SFTPGo admin password exists
+  ansible.builtin.stat:
+    path: /etc/cryptdaemon/sftpgo-admin
+  register: sftpgo_admin_file
+
+- name: Generate the SFTPGo admin password
+  ansible.builtin.shell: |
+    umask 077
+    python3 -c "import os; print(os.urandom(24).hex())" > /etc/cryptdaemon/sftpgo-admin
+  when: not sftpgo_admin_file.stat.exists
+  no_log: true
+
+- name: The daemon (storage account) may read the SFTPGo admin password
+  ansible.builtin.file:
+    path: /etc/cryptdaemon/sftpgo-admin
+    owner: root
+    group: cryptstorage
+    mode: '0640'
+
+- name: Read the SFTPGo admin password
+  ansible.builtin.slurp:
+    src: /etc/cryptdaemon/sftpgo-admin
+  register: sftpgo_admin_content
+  no_log: true
+
+- name: Set the SFTPGo admin password fact
+  ansible.builtin.set_fact:
+    sftpgo_admin_password: "{{ sftpgo_admin_content.content | b64decode | trim }}"
+  no_log: true

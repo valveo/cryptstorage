@@ -1,0 +1,16 @@
+# Secret scan (gitleaks, run in CI). Everything below is a test fixture, not a secret.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "test fixtures"
+paths = [
+  '''cryptclient/e2ee/testdata/''',
+]
+regexes = [
+  '''pw-for-tests-123456''',                 # SFTPGo admin password of the throwaway test server
+  '''GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ''',    # RFC 6238 test vector
+  '''my-ALICEcooper-123''',                  # password-policy test input
+  '''1a8248689307a78a2ae52ca931420bc18597c3efddb770cf25f8c''', # master key of the gocryptfs fixture volume
+  '''0f8fad5b-d9cb-469f-a165-70867728950e''',  # stick id in cryptclient/stickkey tests
+]

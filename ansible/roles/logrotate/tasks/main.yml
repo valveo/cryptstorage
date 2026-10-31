@@ -1,0 +1,27 @@
+---
+# roles/logrotate/tasks/main.yml
+
+- name: Install logrotate
+  ansible.builtin.apt:
+    name: logrotate
+    state: present
+
+- name: Deploy cryptdaemon logrotate config
+  ansible.builtin.copy:
+    src: cryptdaemon
+    dest: /etc/logrotate.d/cryptdaemon
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Deploy nginx logrotate config
+  ansible.builtin.copy:
+    src: cryptstorage-nginx
+    dest: /etc/logrotate.d/cryptstorage-nginx
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Test logrotate config
+  ansible.builtin.command: logrotate --debug /etc/logrotate.d/cryptdaemon
+  changed_when: false

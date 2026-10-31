@@ -1,0 +1,73 @@
+---
+# roles/cryptstack/tasks/main.yml
+# Copies the Docker containers to the server, builds the images and starts the stack
+
+- name: Create stack directories
+  ansible.builtin.file:
+    path: "{{ install_dir }}/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+  loop:
+    - api
+    - webui
+
+- name: Copy API source files
+  ansible.builtin.copy:
+    src: "api/"
+    dest: "{{ install_dir }}/api/"
+    owner: root
+    group: root
+    # the image keeps these modes and its non-root user must read them (no secrets here)
+    mode: '0644'
+    directory_mode: '0755'
+
+- name: Copy Web UI source files
+  ansible.builtin.copy:
+    src: "webui/"
+    dest: "{{ install_dir }}/webui/"
+    owner: root
+    group: root
+    # the image keeps these modes and its non-root user must read them (no secrets here)
+    mode: '0644'
+    directory_mode: '0755'
+
+# docs/BACKUP.md: sudo cryptstorage-backup /srv/backups
+- name: Install the backup script
+  ansible.builtin.copy:
+    src: backup.sh
+    dest: /usr/local/sbin/cryptstorage-backup
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Deploy docker-compose.yml from template
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ install_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: '0640'
+
+- name: Pull MariaDB image
+  community.docker.docker_image:
+    name: mariadb
+    tag: "11"
+    source: pull
+
+- name: Start Docker Compose stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ install_dir }}"
+    state: present
+    pull: missing
+    build: always
+
+- name: Wait for API to become available
+  ansible.builtin.uri:
+    url: "http://localhost:8000/health"
+    status_code: 200
+  register: api_health
+  until: api_health.status == 200
+  retries: 15
+  delay: 5

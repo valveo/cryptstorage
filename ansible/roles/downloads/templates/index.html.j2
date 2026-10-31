@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CryptStorage client download</title>
+<style>
+  :root { color-scheme: dark; --bg:#0a0e14; --fg:#d7dde5; --muted:#8a96a6; --accent:#00e5a0; --line:#1e2733; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 system-ui, sans-serif; }
+  main { max-width:820px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:1.5rem; margin:.2em 0 .6em; }
+  h2 { font-size:1.1rem; margin:1.8em 0 .5em; }
+  a { color:var(--accent); }
+  code, pre { font-family:ui-monospace, monospace; font-size:.88em; }
+  pre { background:#111821; border:1px solid var(--line); padding:10px 12px; overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; }
+  td, th { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .sum { word-break:break-all; color:var(--muted); font-size:.8em; }
+  .note { border:1px solid #ffb020; background:rgba(255,176,32,.07); padding:10px 12px; }
+  .muted { color:var(--muted); }
+</style>
+</head>
+{% set names = download_files | map('basename') | list %}
+{% set exe = names | select('search', '(?i)setup.*\\.exe$') | first | default('') %}
+{% set deb = names | select('search', '\\.deb$') | first | default('') %}
+<body>
+<main>
+<h1>CryptStorage client</h1>
+<p>The client encrypts your files on your own computer before they reach this server
+({{ domain }}). Connecting needs your password and your USB key stick.</p>
+<p class="note">Pre-release software, not independently audited. The programs are not code-signed, so
+Windows SmartScreen may warn about them. Check the SHA-256 sum before you run anything.</p>
+
+<h2>Files</h2>
+<table>
+  <tr><th>File</th><th>Size</th></tr>
+{% for s in download_stats.results %}
+  <tr>
+    <td><a href="{{ s.item | basename | urlencode }}">{{ s.item | basename }}</a>
+        <div class="sum">SHA-256 {{ s.stat.checksum }}</div></td>
+    <td>{{ (s.stat.size / 1048576) | round(1) }} MB</td>
+  </tr>
+{% endfor %}
+</table>
+<p><a href="SHA256SUMS">SHA256SUMS</a> (all of the above in one file)</p>
+
+<h2>Windows 10 or newer</h2>
+<p>Run the <code>Setup</code> file. It also installs the components the client needs (WinFsp, SSHFS-Win,
+Dokan). Then open a command prompt and run <code>cryptclient setup</code>; it walks you through the
+account, the USB stick and the recovery code. Afterwards the tray icon connects when you insert the stick.</p>
+{% if exe %}<p>Check the file first; the sum must match the one above:</p>
+<pre>certutil -hashfile {{ exe }} SHA256</pre>{% endif %}
+
+<h2>Linux (Ubuntu, Debian)</h2>
+<pre>sha256sum -c --ignore-missing SHA256SUMS
+sudo apt install ./{{ deb or 'cryptclient_VERSION_amd64.deb' }}
+cryptclient setup</pre>
+
+<h2>Server</h2>
+<p>Server address for the client: <code>https://{{ domain }}/api</code> (typing just <code>{{ domain }}</code> works too)</p>
+{% if server_pin is defined and server_pin.stdout | default('') %}
+<p>The client saves the server's TLS key pin on the stick when you set it up. It should be
+<code class="sum">sha256/{{ server_pin.stdout }}</code></p>
+{% endif %}
+<p class="muted">Source code: <a href="{{ source_url | default('https://github.com/valveo/cryptstorage') }}">{{ source_url | default('https://github.com/valveo/cryptstorage') }}</a></p>
+</main>
+</body>
+</html>

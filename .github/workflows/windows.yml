@@ -1,0 +1,236 @@
+name: Windows
+
+# Tries the client on a GitHub-hosted Windows machine: build, unit tests, `diagnose`, opening a gocryptfs
+# volume (cppcryptfs + Dokan), the installer on a clean machine, and the SSHFS-Win connection to a real sshd
+# (WSL) as an ordinary user. It has no USB stick; the stick and the real test server are tried by
+# windows-selfhosted.yml on the maintainer's own machine (docs/windows-testing.md).
+# Started by hand only: Windows minutes count double against the free quota, so pull requests are tried
+# on the self-hosted runner instead (windows-selfhosted.yml).
+on:
+  workflow_dispatch:
+
+# The workflow's token can only read the repository (least privilege before the repository goes public)
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: cryptclient
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cryptclient/go.mod
+          cache: false
+      - run: go mod tidy
+      - run: go vet ./...
+      - name: Install Dokan and cppcryptfs (opens the encrypted volume on Windows)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download -R dokan-dev/dokany -p "Dokan_x64.msi" -D "$env:RUNNER_TEMP\dokan"
+          $pr = Start-Process msiexec -ArgumentList "/i","$env:RUNNER_TEMP\dokan\Dokan_x64.msi","/qn","/norestart" -Wait -PassThru
+          if ($pr.ExitCode -ne 0) { throw "Dokan install failed: $($pr.ExitCode)" }
+          $dir = "$env:RUNNER_TEMP\cppcryptfs"
+          gh release download -R bailey27/cppcryptfs -p cppcryptfs.exe -p cppcryptfsctl.exe -D $dir
+          "CRYPTCLIENT_CPPCRYPTFS_DIR=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Unit tests on Windows
+        continue-on-error: true   # a failure here is a finding, not a reason to skip the other steps
+        run: |
+          go test -v -run "TestWindowsVolumeRoundTrip" ./e2ee 2>&1 | Tee-Object -FilePath tests.txt
+          $rc1 = $LASTEXITCODE
+          go test ./e2ee ./crypto ./apiclient ./sshconn ./usb ./setup 2>&1 | Tee-Object -Append -FilePath tests.txt
+          if ($rc1 -ne 0) { exit $rc1 }
+          exit $LASTEXITCODE
+      - run: go build -o cryptclient.exe .
+
+      - name: diagnose before installing anything
+        run: |
+          .\cryptclient.exe diagnose 2>&1 | Tee-Object -FilePath diag-before.txt
+
+      - name: Install WinFsp and SSHFS-Win (Chocolatey)
+        continue-on-error: true
+        run: |
+          choco install winfsp -y --no-progress 2>&1 | Tee-Object -FilePath choco.txt
+          choco install sshfs -y --no-progress 2>&1 | Tee-Object -Append -FilePath choco.txt
+
+      - name: diagnose after installing
+        run: |
+          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + $env:PATH
+          .\cryptclient.exe diagnose 2>&1 | Tee-Object -FilePath diag-after.txt
+          Get-ChildItem "C:\Program Files*\WinFsp*","C:\Program Files*\SSHFS-Win*" -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+            Select-Object -First 40 FullName | Out-File -FilePath tree.txt
+
+      - name: Put the results where they can be read without downloading logs
+        if: always()
+        run: |
+          foreach ($f in "tests.txt","diag-before.txt","diag-after.txt","tree.txt") {
+            if (Test-Path $f) {
+              $text = (Get-Content $f -Raw) -replace "%","%25" -replace "`r","" -replace "`n","%0A"
+              Write-Host "::notice title=$f::$text"
+            }
+          }
+          if (Test-Path choco.txt) {
+            $tail = (Get-Content choco.txt -Tail 25 | Out-String) -replace "%","%25" -replace "`r","" -replace "`n","%0A"
+            Write-Host "::notice title=choco (last lines)::$tail"
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-client
+          path: |
+            cryptclient/cryptclient.exe
+            cryptclient/*.txt
+
+  installer:
+    # A clean machine: build the installer, run it silently, check that it installed the client and
+    # every component, and that the encrypted volume then opens.
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cryptclient/go.mod
+          cache: false
+      - name: Build client and installer
+        working-directory: cryptclient
+        run: |
+          go mod tidy
+          go run ./packaging/windows/winres -o rsrc_windows_amd64.syso
+          go build -ldflags="-s -w" -o packaging/windows/cryptclient.exe .
+          go build -ldflags="-s -w -H=windowsgui" -o packaging/windows/CryptStorage.exe .
+          choco install innosetup -y --no-progress | Out-Null
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.0.0-ci packaging/windows/cryptstorage.iss
+      - name: Run the installer silently on the clean machine
+        run: |
+          $p = Start-Process cryptclient/packaging/windows/Output/CryptStorageSetup.exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$PWD\inst.log" -Wait -PassThru
+          "installer exit code: $($p.ExitCode)" | Tee-Object -FilePath installer.txt
+      - name: Finish as a user would (cppcryptfs comes with the first setup) and check
+        run: |
+          $exe = "$env:ProgramFiles\CryptStorage\cryptclient.exe"
+          "client installed: $(Test-Path $exe)" | Tee-Object -Append installer.txt
+          & $exe install-deps --yes 2>&1 | Tee-Object -Append installer.txt
+          & $exe diagnose 2>&1 | Tee-Object -Append installer.txt
+          Get-Content inst.log -Tail 25 | Tee-Object -FilePath inst-tail.txt | Out-Null
+      - name: The volume opens with what the installer put there
+        working-directory: cryptclient
+        run: |
+          go test -timeout 4m -v -run TestWindowsVolumeRoundTrip ./e2ee 2>&1 | Select-Object -First 40 | Tee-Object -Append ../installer.txt
+          exit $LASTEXITCODE
+      - name: What is on screen and running if the volume test failed
+        if: failure()
+        run: |
+          Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+          $root = [System.Windows.Automation.AutomationElement]::RootElement
+          $wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+          foreach ($w in $wins) {
+            "window pid=$($w.Current.ProcessId) '$($w.Current.Name)'" | Tee-Object -Append installer.txt
+            if ($w.Current.ClassName -eq '#32770') { $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { "   $($_.Current.Name)" } | Tee-Object -Append installer.txt }
+          }
+          Get-Service Dokan*,WinFsp* | ForEach-Object { "service $($_.Name) $($_.Status)" } | Tee-Object -Append installer.txt
+          Get-Process cppcryptfs* -ErrorAction SilentlyContinue | ForEach-Object { "proc $($_.Name) $($_.Id)" } | Tee-Object -Append installer.txt
+      - name: Report
+        if: always()
+        run: |
+          foreach ($f in "installer.txt","inst-tail.txt") {
+            if (Test-Path $f) {
+              $t = (Get-Content $f -Raw); if ($t.Length -gt 3800) { $t = $t.Substring($t.Length - 3800) }
+              $t = $t -replace "%","%25" -replace "`r","" -replace "`n","%0A"
+              Write-Host "::notice title=$f::$t"
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CryptStorageSetup
+          path: cryptclient/packaging/windows/Output/CryptStorageSetup.exe
+
+  connection:
+    # The whole connection path on a clean machine, without the API. The storage server is a real Linux
+    # sshd inside WSL on the runner. The test runs as an ordinary (non-administrator) user, because that
+    # is what the client is for: SSHFS-Win cannot write when started from the runner's elevated
+    # administrator token (the server refuses the chown that Windows asks for).
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cryptclient/go.mod
+          cache: false
+      - uses: Vampire/setup-wsl@v6
+        with:
+          distribution: Ubuntu-22.04
+          additional-packages: openssh-server
+      - name: Install the components the way a user would
+        working-directory: cryptclient
+        run: |
+          go mod tidy
+          go build -o cryptclient.exe .
+          .\cryptclient.exe install-deps --yes 2>&1 | Tee-Object -FilePath ../conn.txt
+          New-Item -ItemType Directory C:\Users\Public\cpp -Force | Out-Null
+          Copy-Item "$env:LOCALAPPDATA\cryptstorage\*.exe" C:\Users\Public\cpp
+      - name: Linux storage server in WSL
+        run: |
+          ssh-keygen -t ecdsa -b 256 -m PEM -N "" -f C:\Users\Public\sdkey -q
+          wsl -d Ubuntu -u root -- bash -c "useradd -m tester; mkdir -p /data /run/sshd /home/tester/.ssh; ssh-keygen -A; chown tester:tester /data"
+          Get-Content C:\Users\Public\sdkey.pub -Raw | wsl -d Ubuntu -u root -- bash -c "cat > /home/tester/.ssh/authorized_keys; chown -R tester:tester /home/tester/.ssh; chmod 700 /home/tester/.ssh; chmod 600 /home/tester/.ssh/authorized_keys"
+          # sshd stays in the foreground inside a wsl process: the distribution stops when its last process ends
+          Start-Process wsl -ArgumentList "-d","Ubuntu","-u","root","--","/usr/sbin/sshd","-D","-p","2222" -WindowStyle Hidden
+          for ($i = 0; $i -lt 30; $i++) { if (Test-NetConnection 127.0.0.1 -Port 2222 -InformationLevel Quiet -WarningAction SilentlyContinue) { break }; Start-Sleep 2 }
+          ssh -p 2222 -i C:\Users\Public\sdkey -o BatchMode=yes -o StrictHostKeyChecking=no tester@127.0.0.1 "echo storage server reachable as $(whoami)" 2>&1 | Tee-Object -Append conn.txt
+      - name: Connection test as an ordinary user
+        working-directory: cryptclient
+        run: |
+          go test -c -o C:\Users\Public\volume.test.exe ./volume
+          go test -c -o C:\Users\Public\syncer.test.exe ./syncer
+          $pw = ConvertTo-SecureString "Sp1ke-Passw0rd!x" -AsPlainText -Force
+          New-LocalUser sdnormal -Password $pw -PasswordNeverExpires | Out-Null
+          icacls C:\Users\Public\sdkey /grant "sdnormal:R" | Out-Null
+          icacls C:\Users\Public\cpp /grant "sdnormal:RX" /T | Out-Null
+          icacls C:\Users\Public\volume.test.exe /grant "sdnormal:RX" | Out-Null
+          icacls C:\Users\Public\syncer.test.exe /grant "sdnormal:RX" | Out-Null
+          icacls C:\Users\Public /grant "sdnormal:(OI)(CI)M" | Out-Null
+          @'
+          $env:CRYPTSTORAGE_IT_SSH = "127.0.0.1:2222:tester"
+          $env:CRYPTSTORAGE_IT_SSH_KEY = "C:\Users\Public\sdkey"
+          $env:CRYPTCLIENT_CPPCRYPTFS_DIR = "C:\Users\Public\cpp"
+          $env:CRYPTCLIENT_SSHFS_DEBUG = "1"
+          New-Item -ItemType Directory -Force C:\Users\Public\tmp | Out-Null
+          $env:TEMP = "C:\Users\Public\tmp"; $env:TMP = "C:\Users\Public\tmp"
+          & C:\Users\Public\volume.test.exe @("-test.v","-test.timeout=8m","-test.run=TestSFTPVolume") *> C:\Users\Public\p3out.txt
+          "exit=$LASTEXITCODE" | Out-File -Append C:\Users\Public\p3out.txt
+          # the synchronised folder: two devices, rclone against two cppcryptfs drives. It downloads rclone
+          # into LOCALAPPDATA, which this process inherits from the runner's account: point it somewhere ours
+          $env:LOCALAPPDATA = "C:\Users\Public\sdlocal"
+          & C:\Users\Public\syncer.test.exe @("-test.v","-test.timeout=10m","-test.run=TestSFTPSync") *> C:\Users\Public\p4out.txt
+          "exit=$LASTEXITCODE" | Out-File -Append C:\Users\Public\p4out.txt
+          '@ | Out-File -Encoding ascii C:\Users\Public\p3.ps1
+          $cred = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\sdnormal", $pw)
+          Start-Process powershell -Credential $cred -LoadUserProfile -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File","C:\Users\Public\p3.ps1" -Wait -WorkingDirectory C:\Users\Public
+          $out = Get-Content C:\Users\Public\p3out.txt
+          $out | Where-Object { $_ -notmatch "debug1|Extension|^\s*\[0000|sent:|received:|rtt|num conn|Bytes per|Transferred" } | Tee-Object -Append ../conn.txt
+          wsl -d Ubuntu -u root -- ls -A /data | Tee-Object -Append ../conn.txt
+          $names = (wsl -d Ubuntu -u root -- ls -A /data) -join ","
+          if ($names -notmatch "gocryptfs.conf") { throw "the volume files are not on the server" }
+          if ($names -match "secret-name") { throw "a file name reached the server unencrypted" }
+          if (-not ($out | Select-String -SimpleMatch "PASS: TestSFTPVolume")) { throw "the connection test failed" }
+          $sync = Get-Content C:\Users\Public\p4out.txt
+          $sync | Where-Object { $_ -notmatch "debug1|Extension|^\s*\[0000|sent:|received:|rtt|num conn|Bytes per|Transferred" } | Tee-Object -Append ../conn.txt
+          if (-not ($sync | Select-String -SimpleMatch "PASS: TestSFTPSync")) { throw "the synchronised folder test failed" }
+      - name: Report
+        if: always()
+        run: |
+          $t = Get-Content conn.txt -Raw; if ($t.Length -gt 3800) { $t = $t.Substring($t.Length - 3800) }
+          Write-Host "::notice title=connection::$($t -replace '%','%25' -replace "`r",'' -replace "`n",'%0A')"

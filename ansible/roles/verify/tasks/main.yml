@@ -1,0 +1,74 @@
+---
+# roles/verify/tasks/main.yml
+# Post-install health checks
+
+- name: Check cryptdaemon is running
+  ansible.builtin.systemd:
+    name: cryptdaemon
+  register: daemon_status
+  failed_when: daemon_status.status.ActiveState != 'active'
+
+- name: Check cryptdaemon socket exists
+  ansible.builtin.stat:
+    path: /run/cryptdaemon/cryptdaemon.sock
+  register: sock
+  failed_when: not sock.stat.exists
+
+- name: Check Docker is running
+  ansible.builtin.command: docker ps
+  register: docker_ps
+  changed_when: false
+
+- name: Check all expected containers are up
+  ansible.builtin.shell: |
+    set -o pipefail
+    names=$(docker ps --format '{{ '{{' }}.Names{{ '}}' }}')
+    for c in webui api db sftpgo; do echo "$names" | grep -q -- "$c" || { echo "missing: $c"; exit 1; }; done
+    echo "$names"
+  args:
+    executable: /bin/bash
+  register: containers
+  changed_when: false
+  failed_when: containers.rc != 0
+
+- name: Check API health endpoint
+  ansible.builtin.uri:
+    url: "http://localhost:8000/health"
+    status_code: 200
+  register: api_check
+
+- name: Check nginx is running
+  ansible.builtin.systemd:
+    name: nginx
+  register: nginx_status
+  failed_when: nginx_status.status.ActiveState != 'active'
+
+- name: Check fail2ban is running
+  ansible.builtin.systemd:
+    name: fail2ban
+  register: f2b_status
+  failed_when: f2b_status.status.ActiveState != 'active'
+
+- name: Check HTTPS is accessible
+  ansible.builtin.uri:
+    url: "https://{{ domain }}"
+    status_code: 200
+    validate_certs: true
+  register: https_check
+  ignore_errors: true  # DNS may not have propagated yet
+
+- name: Print installation summary
+  ansible.builtin.debug:
+    msg:
+      - "============================================"
+      - "  CryptStorage installation complete!"
+      - "============================================"
+      - "  URL:         https://{{ domain }}"
+      - "  Daemon:      {{ daemon_status.status.ActiveState }}"
+      - "  API:         {{ api_check.status }}"
+      - "  Nginx:       {{ nginx_status.status.ActiveState }}"
+      - "  Fail2ban:    {{ f2b_status.status.ActiveState }}"
+      - "  Containers:  {{ containers.stdout_lines }}"
+      - "============================================"
+      - "  Keep your inventory (it holds the secrets) and back up the server: docs/BACKUP.md"
+      - "============================================"

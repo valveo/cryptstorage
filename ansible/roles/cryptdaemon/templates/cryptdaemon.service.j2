@@ -1,0 +1,53 @@
+[Unit]
+Description=CryptDaemon - manages the users of the SFTPGo service that holds users' ciphertext
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 {{ install_dir }}/cryptdaemon/daemon.py
+Restart=on-failure
+RestartSec=5
+# Not root: the storage account (also the user of the SFTPGo container), which owns the storage
+# the daemon manages. The extra group lets it hand the socket to the API container.
+User=cryptstorage
+Group=cryptstorage
+SupplementaryGroups={{ cryptapi_gid | default(3000) }}
+WorkingDirectory={{ install_dir }}/cryptdaemon
+
+# Socket: /run/cryptdaemon/cryptdaemon.sock, cryptstorage:cryptapi 0660. The directory is kept over
+# restarts because the API container has it bind-mounted.
+RuntimeDirectory=cryptdaemon
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+Environment=CRYPTDAEMON_SOCKET_GID={{ cryptapi_gid | default(3000) }}
+
+# SFTPGo: REST API on the loopback, data directory shared with the container (the storage account)
+Environment=SFTPGO_API_URL=http://127.0.0.1:8081
+Environment=SFTPGO_ADMIN_PASSWORD_FILE=/etc/cryptdaemon/sftpgo-admin
+Environment=CRYPTSTORAGE_DATA_BASE={{ storage_dir | default('/srv/cryptstorage') }}
+Environment=SFTPGO_UID={{ storage_account_uid }}
+Environment=SFTPGO_GID={{ storage_account_gid }}
+
+# The daemon writes its log file itself; its stdout copy goes to the journal only
+StandardOutput=journal
+StandardError=append:/var/log/cryptdaemon.log
+
+# Hardening. The storage, the socket and its own log are the only places it writes.
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ storage_dir | default('/srv/cryptstorage') }} -/var/log/cryptdaemon.log
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,3 @@
+{% for s in download_stats.results %}
+{{ s.stat.checksum }}  {{ s.item | basename }}
+{% endfor %}

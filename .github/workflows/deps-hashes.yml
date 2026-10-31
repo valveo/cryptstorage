@@ -1,0 +1,28 @@
+name: Dependency hashes
+# Prints version, asset names and SHA-256 of the Windows components the client installs, so they can
+# be pinned in cryptclient/deps/deps.go. Run manually when bumping a version.
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/deps-hashes.yml"]
+# The workflow's token can only read the repository (least privilege before the repository goes public)
+permissions:
+  contents: read
+
+jobs:
+  hashes:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=""
+          for r in dokan-dev/dokany winfsp/winfsp winfsp/sshfs-win bailey27/cppcryptfs; do
+            tag=$(gh api repos/$r/releases/latest --jq .tag_name)
+            out+="== $r $tag%0A"
+            for a in $(gh api repos/$r/releases/latest --jq '.assets[].name' | grep -i -E 'x64|amd64|^cppcryptfs(ctl)?\.exe$|\.msi$' | grep -v -i -E 'arm|x86\.|\.pdb|sym|\.zip|Win32|_32'); do
+              gh release download $tag -R $r -p "$a" -D dl >/dev/null 2>&1
+              out+="$(sha256sum dl/$a | cut -d' ' -f1)  $a%0A"
+            done
+          done
+          echo "::notice title=hashes::$out"

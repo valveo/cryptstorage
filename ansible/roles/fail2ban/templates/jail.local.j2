@@ -1,0 +1,28 @@
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+backend  = systemd
+
+# E-mail notifications (optional)
+# destemail = {{ letsencrypt_email }}
+# action = %(action_mwl)s
+
+# The host's own sshd (reads the systemd journal)
+[sshd]
+enabled  = true
+port     = ssh
+maxretry = 4
+bantime  = 2h
+
+# Failed logins against the API (the web UI forwards the real client IP to the API,
+# whose own per-user and per-IP throttling covers those)
+[cryptstorage-api]
+enabled  = true
+port     = http,https
+filter   = cryptstorage
+backend  = auto
+logpath  = /var/log/nginx/cryptstorage-access.log
+maxretry = 8
+bantime  = 2h
+findtime = 5m

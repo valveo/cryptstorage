@@ -1,0 +1,308 @@
+name: CI
+
+# A push to a pull request's branch is covered by the pull_request run; running on both doubled the
+# hosted minutes (the free quota ran out in October 2026)
+#
+# All jobs run on the maintainer's self-hosted Linux runner, which is the LAN test server (made for this;
+# it can be reinstalled). Jobs that need root get sudo through scripts/ci_sudo.sh with the runner
+# account's password (secret LINUXSERVERSSH), and the integration test uses ports of its own so the
+# test server's API (8099) keeps running. The runner never runs a fork's pull request (the `if` on each
+# job); check this again before the repository goes public.
+#
+# Pull requests only, not again after the merge: the merged branch was just tested as the pull request's
+# merge commit. Each job runs only when the pull request touches what it tests (job `changes`); the
+# secret scan always runs. Started by hand (Actions page), every job runs.
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # sudo on the self-hosted runner asks for the runner account's password (scripts/ci_sudo.sh)
+  SUDO_PASSWORD: ${{ secrets.LINUXSERVERSSH }}
+
+# One runner: a newer push to the same branch cancels the run it replaces instead of queueing behind it
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# The workflow's token can only read the repository (least privilege before the repository goes public)
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    # Which of the jobs below this pull request needs. A change to this file or to the Python
+    # requirements runs them all.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, linux]
+    outputs:
+      python: ${{ steps.f.outputs.python }}
+      go: ${{ steps.f.outputs.go }}
+      passkeys: ${{ steps.f.outputs.passkeys }}
+      sftpgo: ${{ steps.f.outputs.sftpgo }}
+      e2ee: ${{ steps.f.outputs.e2ee }}
+    steps:
+      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
+      - name: Workspace owned by the runner account
+        run: |
+          [ -d "$GITHUB_WORKSPACE" ] || exit 0
+          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
+            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          fi
+          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
+          # every later checkout fails: start that repository again, checkout fetches it anew
+          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
+            echo "broken git data in the workspace: removing it"
+            rm -rf "$GITHUB_WORKSPACE/.git"
+          fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: f
+        name: What this pull request touches
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASE" ]; then
+            files=$(git diff --name-only "$BASE" HEAD)
+          else
+            files=.github/workflows/ci.yml # started by hand: everything
+          fi
+          echo "$files"
+          all=false
+          grep -qE '^(\.github/workflows/ci\.yml|requirements[^/]*\.txt|pytest\.ini)$' <<<"$files" && all=true
+          has() { $all || grep -qE "$1" <<<"$files"; }
+          # Python: the API, daemon, web UI and their tests; everything except the client, docs and Ansible
+          if $all || grep -vqE '^(cryptclient/|docs/|ansible/|[^/]*\.md$|\.github/workflows/windows)' <<<"$files"; then
+            echo python=true >>"$GITHUB_OUTPUT"
+          fi
+          has '^cryptclient/' && echo go=true >>"$GITHUB_OUTPUT"
+          has '^(api/|webui/|tests/browser/|cryptclient/)' && echo passkeys=true >>"$GITHUB_OUTPUT"
+          has '^(ansible/|cryptdaemon/|scripts/(sftpgo_container_test|install_sftpgo)\.sh$)' && echo sftpgo=true >>"$GITHUB_OUTPUT"
+          has '^(api/|cryptdaemon/|cryptclient/|webui/assets/|scripts/)' && echo e2ee=true >>"$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  python:
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' }}
+    runs-on: [self-hosted, linux]
+    steps:
+      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
+      - name: Workspace owned by the runner account
+        run: |
+          [ -d "$GITHUB_WORKSPACE" ] || exit 0
+          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
+            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          fi
+          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
+          # every later checkout fails: start that repository again, checkout fetches it anew
+          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
+            echo "broken git data in the workspace: removing it"
+            rm -rf "$GITHUB_WORKSPACE/.git"
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - name: SFTPGo (pinned release; the daemon's client is tested against the real server)
+        # already there on the self-hosted runner (it is the test server's version): no sudo needed then
+        run: sftpgo --version 2>/dev/null | grep -qi "^sftpgo 2.7.6" || sudo scripts/install_sftpgo.sh
+      - name: Static analysis (undefined names, bad imports)
+        run: python -m pyflakes api cryptdaemon tests
+      - name: Tests (unit, API <-> daemon smoke test, web UI against a stub API)
+        run: python -m pytest -q
+      - name: Known vulnerabilities in pinned dependencies
+        run: pip install pip-audit && pip-audit -r api/requirements.txt --no-deps --disable-pip
+
+  go:
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: [self-hosted, linux]
+    defaults:
+      run:
+        working-directory: cryptclient
+    steps:
+      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
+      - name: Workspace owned by the runner account
+        run: |
+          [ -d "$GITHUB_WORKSPACE" ] || exit 0
+          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
+            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          fi
+          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
+          # every later checkout fails: start that repository again, checkout fetches it anew
+          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
+            echo "broken git data in the workspace: removing it"
+            rm -rf "$GITHUB_WORKSPACE/.git"
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cryptclient/go.mod
+      # go.sum is committed: fail when go.mod or go.sum would change, instead of fixing them silently
+      - run: go mod tidy -diff
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Cross-compile
+        run: |
+          for os in linux windows darwin; do
+            GOOS=$os CGO_ENABLED=0 go build -o /dev/null .
+          done
+      # Report-only for now: findings in the Go toolchain itself would otherwise block unrelated changes
+      - name: Known vulnerabilities (govulncheck)
+        continue-on-error: true
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  secrets:
+    # Secret scan of the tree and the history of this commit (gitleaks, pinned release; fixtures in .gitleaks.toml).
+    # Only HEAD's history: --all also scanned other PRs' branches left in the self-hosted runner's
+    # workspace, so one PR's finding failed every PR. Each branch is still scanned by its own run.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, linux]
+    # A scan takes seconds; a stuck one held the test server for minutes (2026-10-29)
+    timeout-minutes: 10
+    steps:
+      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
+      - name: Workspace owned by the runner account
+        run: |
+          [ -d "$GITHUB_WORKSPACE" ] || exit 0
+          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
+            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          fi
+          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
+          # every later checkout fails: start that repository again, checkout fetches it anew
+          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
+            echo "broken git data in the workspace: removing it"
+            rm -rf "$GITHUB_WORKSPACE/.git"
+          fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        run: |
+          T=$(mktemp -d)
+          curl -fsSL -o $T/gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz
+          echo "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb  $T/gl.tgz" | sha256sum -c -
+          tar -xzf $T/gl.tgz -C $T gitleaks
+          # Only the history: every commit's changes, so the tree at HEAD too. A directory scan also read
+          # the git packs and whatever earlier jobs left in the self-hosted workspace, and could hang the
+          # test server (2026-10-29)
+          nice -n 10 $T/gitleaks git . --no-banner --redact --max-target-megabytes 5 --log-opts="HEAD"
+
+  passkeys-browser:
+    # Passkeys end to end: real API, PHP web UI, Chromium's virtual authenticator, the app's sign-in
+    needs: changes
+    if: ${{ needs.changes.outputs.passkeys == 'true' }}
+    runs-on: [self-hosted, linux]
+    steps:
+      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
+      - name: Workspace owned by the runner account
+        run: |
+          [ -d "$GITHUB_WORKSPACE" ] || exit 0
+          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
+            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          fi
+          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
+          # every later checkout fails: start that repository again, checkout fetches it anew
+          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
+            echo "broken git data in the workspace: removing it"
+            rm -rf "$GITHUB_WORKSPACE/.git"
+          fi
+      - uses: actions/checkout@v4
+      - run: scripts/ci_sudo.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cryptclient/go.mod
+      - run: pip install -r requirements-dev.txt
+      - run: php -m 2>/dev/null | grep -qx mbstring || (sudo apt-get -o DPkg::Lock::Timeout=600 update && sudo apt-get -o DPkg::Lock::Timeout=600 install -y php-cli php-mbstring)
+      - name: Playwright with Chromium
+        run: |
+          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && npm install playwright@1.63.0 >/dev/null
+          npx playwright install --with-deps chromium
+      - name: Browser test
+        run: NODE_PATH=/tmp/pw/node_modules tests/browser/run.sh
+
+  sftpgo-container:
+    # The SFTPGo container of the Ansible stack with the role's own tasks: user creation, login with the
+    # pinned host key, restart and restore
+    needs: changes
+    if: ${{ needs.changes.outputs.sftpgo == 'true' }}
+    runs-on: [self-hosted, linux]
+    steps:
+      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
+      - name: Workspace owned by the runner account
+        run: |
+          [ -d "$GITHUB_WORKSPACE" ] || exit 0
+          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
+            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          fi
+          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
+          # every later checkout fails: start that repository again, checkout fetches it anew
+          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
+            echo "broken git data in the workspace: removing it"
+            rm -rf "$GITHUB_WORKSPACE/.git"
+          fi
+      - uses: actions/checkout@v4
+      - run: scripts/ci_sudo.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt ansible-core
+      # the test server is a plain Ubuntu: docker comes from the distribution the first time
+      - name: Docker with compose
+        run: |
+          docker compose version >/dev/null 2>&1 && exit 0
+          sudo apt-get -o DPkg::Lock::Timeout=600 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq docker.io docker-compose-v2
+          sudo systemctl enable --now docker
+          sudo docker compose version
+          if ss -ltn | grep -q ':8081 '; then echo "port 8081 is taken on this machine"; ss -ltnp | grep ':8081 '; exit 1; fi
+      - name: Container test
+        run: sudo env "PATH=$PATH" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" PYTHONDONTWRITEBYTECODE=1 SFTP_PORT=12223 scripts/sftpgo_container_test.sh
+
+  e2ee:
+    # The whole encrypted-storage flow with the real parts: API, SFTPGo, sshfs, gocryptfs
+    needs: changes
+    if: ${{ needs.changes.outputs.e2ee == 'true' }}
+    runs-on: [self-hosted, linux]
+    steps:
+      # A root step can leave files the runner cannot delete, and checkout then fails for every later job
+      - name: Workspace owned by the runner account
+        run: |
+          [ -d "$GITHUB_WORKSPACE" ] || exit 0
+          if [ -n "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ]; then
+            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          fi
+          # A crash of the machine during a fetch leaves broken git data (empty or missing objects), and
+          # every later checkout fails: start that repository again, checkout fetches it anew
+          if [ -d "$GITHUB_WORKSPACE/.git" ] && ! git -C "$GITHUB_WORKSPACE" fsck --connectivity-only --no-dangling >/dev/null 2>&1; then
+            echo "broken git data in the workspace: removing it"
+            rm -rf "$GITHUB_WORKSPACE/.git"
+          fi
+      - uses: actions/checkout@v4
+      - run: scripts/ci_sudo.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cryptclient/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: sudo apt-get -o DPkg::Lock::Timeout=600 update && sudo apt-get -o DPkg::Lock::Timeout=600 install -y gocryptfs sshfs fuse3
+      - run: pip install -r requirements-dev.txt
+      - run: cd cryptclient && go mod tidy
+      - name: The browser derives the same login key as the Go client
+        run: node webui/assets/derive.test.mjs
+      - name: Integration test
+        # ports of its own: the test server's API (8099) and SFTPGo keep running beside it. LD_LIBRARY_PATH:
+        # the Python of setup-python does not start without it, and sudo drops it
+        run: sudo env "PATH=$PATH" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" PYTHONDONTWRITEBYTECODE=1 PORT_API=18099 PORT_SFTP=12222 SFTPGO_API_PORT=18089 scripts/e2ee_integration.sh

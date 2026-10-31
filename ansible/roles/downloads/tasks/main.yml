@@ -1,0 +1,84 @@
+---
+# roles/downloads/tasks/main.yml
+# Optional download page for the client: https://<domain>/download/ (client_downloads_src).
+# The files are built elsewhere (as in .github/workflows/release.yml) and copied as they are;
+# the page lists each with its SHA-256 and the server's TLS pin.
+
+- name: Client files on the control node
+  ansible.builtin.set_fact:
+    download_files: "{{ lookup('ansible.builtin.fileglob', client_downloads_src ~ '/*', wantlist=True)
+                        | reject('search', '/(index\\.html|SHA256SUMS)$') | sort }}"
+
+- name: There must be something to offer
+  ansible.builtin.assert:
+    that: download_files | length > 0
+    fail_msg: "client_downloads_src ({{ client_downloads_src }}) has no files"
+    quiet: true
+
+- name: Download directory
+  ansible.builtin.file:
+    path: "{{ downloads_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy the client files
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ downloads_dir }}/{{ item | basename }}"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ download_files }}"
+  loop_control:
+    label: "{{ item | basename }}"
+
+- name: Files now on the server
+  ansible.builtin.find:
+    paths: "{{ downloads_dir }}"
+    file_type: file
+  register: served
+
+- name: Remove files that are no longer offered
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ served.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: (item.path | basename) not in (download_files | map('basename') | list + ['index.html', 'SHA256SUMS'])
+
+- name: Checksums of the offered files
+  ansible.builtin.stat:
+    path: "{{ downloads_dir }}/{{ item | basename }}"
+    checksum_algorithm: sha256
+  loop: "{{ download_files }}"
+  loop_control:
+    label: "{{ item | basename }}"
+  register: download_stats
+
+- name: SHA256SUMS
+  ansible.builtin.template:
+    src: SHA256SUMS.j2
+    dest: "{{ downloads_dir }}/SHA256SUMS"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Download page
+  ansible.builtin.template:
+    src: index.html.j2
+    dest: "{{ downloads_dir }}/index.html"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: The download page answers
+  ansible.builtin.uri:
+    url: "https://{{ domain }}/download/"
+    status_code: 200
+  register: download_page
+  retries: 3
+  delay: 5
+  until: download_page.status == 200

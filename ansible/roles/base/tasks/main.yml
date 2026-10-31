@@ -1,0 +1,137 @@
+---
+# roles/base/tasks/main.yml
+# Base setup: packages, directories, dependencies, swap on small servers
+
+- name: Update apt cache and upgrade packages
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: dist
+    cache_valid_time: 3600
+
+- name: Install required system packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - git
+      - unzip
+      - ufw
+      - fail2ban
+      - python3
+      - python3-pip
+      - python3-venv
+      - certbot
+      - python3-certbot-nginx
+      - nginx
+      - ca-certificates
+      - openssh-client   # ssh-keygen for the SFTP host keys (cryptdaemon role)
+      - gnupg
+      - lsb-release
+      - apparmor
+      - apparmor-utils
+      - unattended-upgrades
+    state: present
+
+# 0711: cryptdaemon runs as the cryptstorage user and must enter its own directory below this
+- name: Create install directory
+  ansible.builtin.file:
+    path: "{{ install_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0711'
+
+- name: Set the system timezone (server_timezone, default UTC)
+  community.general.timezone:
+    name: "{{ server_timezone | default('UTC') }}"
+
+# Only when server_locale is set (e.g. fi_FI.UTF-8); otherwise the image's locale is kept
+- name: Install the locales package
+  ansible.builtin.apt:
+    name: locales
+    state: present
+  when: server_locale is defined
+
+- name: Generate the system locale
+  community.general.locale_gen:
+    name: "{{ server_locale }}"
+    state: present
+  when: server_locale is defined
+
+- name: Set the default locale
+  ansible.builtin.command: update-locale LANG={{ server_locale }}
+  changed_when: false
+  when: server_locale is defined
+
+- name: Configure sysctl - disable IPv6 (optional hardening)
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+  loop:
+    - { key: "net.ipv4.tcp_syncookies",    value: "1" }
+    - { key: "net.ipv4.conf.all.rp_filter", value: "1" }
+    - { key: "fs.protected_hardlinks",      value: "1" }
+    - { key: "fs.protected_symlinks",       value: "1" }
+
+# A 1 GB VPS cannot build the images and run MariaDB, the API, the web UI and SFTPGo
+# without swap. Set swap_size_mb: 0 to skip; an existing /swapfile is left alone.
+- name: Swap file on small servers
+  when:
+    - (swap_size_mb | default(2048) | int) > 0
+    - ansible_memtotal_mb < 2048
+    - ansible_swaptotal_mb == 0
+  block:
+    - name: Create the swap file
+      ansible.builtin.command: fallocate -l {{ swap_size_mb | default(2048) }}M /swapfile
+      args:
+        creates: /swapfile
+
+    - name: Swap file is readable by root only
+      ansible.builtin.file:
+        path: /swapfile
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Format and enable the swap file
+      ansible.builtin.shell: |
+        mkswap /swapfile
+        swapon /swapfile
+
+    - name: Enable the swap file at boot
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        line: /swapfile none swap sw 0 0
+
+# Security updates install themselves (Ubuntu and Debian both ship the security origin enabled)
+- name: Enable automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    owner: root
+    group: root
+    mode: '0644'
+
+# Key-only SSH. Skipped when Ansible itself logs in with a password (ansible_password set),
+# so the playbook never locks out the connection it is running on. The file sorts before
+# cloud-init's 50-cloud-init.conf: sshd uses the first value it reads.
+- name: SSH accepts keys only
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-cryptstorage.conf
+    content: |
+      # Managed by the CryptStorage playbook (ansible/roles/base)
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+    owner: root
+    group: root
+    mode: '0644'
+    validate: sshd -t -f %s
+  when:
+    - ssh_keys_only | default(true) | bool
+    - ansible_password is not defined
+  notify: Reload ssh

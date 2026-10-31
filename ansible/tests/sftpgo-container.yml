@@ -1,0 +1,42 @@
+---
+# Prepares the SFTPGo container of the stack on this machine with the real role tasks, for
+# scripts/sftpgo_container_test.sh. Not for servers: it writes /etc/cryptdaemon and
+# a compose file with placeholder secrets for everything except SFTPGo.
+#
+#   ansible-playbook ansible/tests/sftpgo-container.yml -e install_dir=/tmp/x/opt -e storage_dir=/tmp/x/srv/cryptstorage
+
+- name: SFTPGo container test setup
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  vars:
+    sftp_port: 2222
+    domain: cryptstorage.test
+    db_root_password: placeholder
+    db_password: placeholder
+    jwt_secret_key: placeholder
+    refresh_token_hmac_key: placeholder
+    totp_encryption_key: placeholder
+    daemon_auth_key: placeholder
+  tasks:
+    - name: Storage account (same tasks as on a server)
+      ansible.builtin.include_role:
+        name: cryptdaemon
+        tasks_from: account.yml
+
+    - name: SFTPGo admin password (same tasks as on a server)
+      ansible.builtin.include_role:
+        name: cryptdaemon
+        tasks_from: sftpgo_admin.yml
+
+    - name: Storage, SFTPGo state and host keys (same tasks as on a server)
+      ansible.builtin.include_role:
+        name: cryptdaemon
+        tasks_from: sftpgo_state.yml
+
+    - name: The compose file of the stack
+      ansible.builtin.template:
+        src: ../roles/cryptstack/templates/docker-compose.yml.j2
+        dest: "{{ install_dir }}/docker-compose.yml"
+        mode: '0640'
