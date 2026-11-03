@@ -3,7 +3,7 @@
 All notable changes are listed here. Versions follow [Semantic Versioning](https://semver.org/); before
 1.0 any release may change the storage format or the API, and the release notes say how to move over.
 
-## [0.1.1] – unreleased
+## [0.1.1] – 2026-11-03
 
 ### Security
 - **Per-server password salt (key derivation version 2).** The salt of the password's Argon2id run now
