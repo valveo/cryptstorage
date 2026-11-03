@@ -4,7 +4,7 @@ User data is only recoverable from **these things together**:
 
 | What | Where | Why it matters |
 |---|---|---|
-| The database | MariaDB (`cryptdb`) | Accounts, login hashes, TOTP secrets and passkeys, recovery verifiers, escrow blobs and the escrow settings log, and the **stick secrets** (TOTP and stick secrets are encrypted under a key from `TOTP_ENCRYPTION_KEY`, which is not in the database: keep it too, apart from the backup). |
+| The database | MariaDB (`cryptdb`) | Accounts, login hashes, TOTP secrets and passkeys, recovery verifiers, escrow blobs and the escrow settings log, the server's **key derivation salt** (`kdf_salt`: every user's keys depend on it, a new one locks everyone out), and the **stick secrets** (TOTP and stick secrets are encrypted under a key from `TOTP_ENCRYPTION_KEY`, which is not in the database: keep it too, apart from the backup). |
 | The ciphertext | `/srv/cryptstorage` (`storage_dir`) | The users' encrypted files (gocryptfs format, one directory per user). |
 | The SFTPGo state | `<install_dir>/sftpgo` | SFTPGo's user database and the **SSH host keys**. Without the host keys every client reports a changed server key. |
 | The TLS certificate and key | `/etc/letsencrypt` | The clients **pin the server's public key** (saved on every stick). A restored server with a new key is refused by every client until each stick is set up again. |

@@ -3,6 +3,28 @@
 All notable changes are listed here. Versions follow [Semantic Versioning](https://semver.org/); before
 1.0 any release may change the storage format or the API, and the release notes say how to move over.
 
+## [0.1.1] – unreleased
+
+### Security
+- **Per-server password salt (key derivation version 2).** The salt of the password's Argon2id run now
+  includes a random 32-byte value that each server creates once (`kdf_salt`, public in `/server-info`,
+  stored in the database). Before, it came from the username alone, so guesses for a known username could
+  be computed before any server's data was taken, and the same username had the same salt on every server.
+  Login still reveals nothing about which accounts exist. Details: [docs/design-e2ee.md](docs/design-e2ee.md),
+  section 5a.
+
+### Moving over (automatic)
+- Existing accounts and volumes move over the first time the user connects with the 0.1.1 app
+  (`cryptclient connect`, the tray, `init-storage` or `setup`): the app re-wraps `gocryptfs.conf` under the new
+  volume passphrase and then replaces the login key on the server. The files are not re-encrypted, and
+  the password stays the same.
+- **After the move, older apps (0.1.0) can no longer sign in to that account.** Update the app on every
+  computer. Until an account has moved, 0.1.0 apps keep working.
+- The web UI derives the new key in the browser and sends the old one next to it, so it signs in to
+  accounts on either version; new accounts created there use version 2.
+- Server: two new tables (`server_settings`, `user_kdf`) are created at start-up; nothing to migrate by hand
+  (reference SQL in `api/migrations/013_kdf_v2.sql`). Keep the database backup: the salt is in it.
+
 ## [0.1.0] – 2026-10-31 (first public pre-release)
 
 Personal encrypted storage: one user, one volume. Shared folders for groups come in 0.2. Not

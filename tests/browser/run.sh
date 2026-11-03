@@ -17,3 +17,11 @@ export DATABASE_URL="sqlite:///$W/db.sqlite" JWT_SECRET_KEY=$(openssl rand -hex 
 API_BASE_URL="http://127.0.0.1:$API_PORT" php -S "localhost:$WEB_PORT" -t ../../webui >"$W/php.log" 2>&1 &
 for i in $(seq 1 40); do curl -sf "http://127.0.0.1:$API_PORT/health" >/dev/null && break; sleep 0.5; done
 WEB_URL="http://localhost:$WEB_PORT" API_URL="http://127.0.0.1:$API_PORT" CLI_APP="$W/cliapp" NODE_PATH=${NODE_PATH:-$(npm root -g)} node passkey.mjs || { tail -20 "$W/api.log"; echo "== web UI (php -S)"; tail -20 "$W/php.log"; exit 1; }
+# the account the browser registered uses the server's key derivation salt (version 2, api/kdf.py)
+"$PYTHON" - "$W/db.sqlite" <<'PY'
+import sqlite3, sys
+rows = sqlite3.connect(sys.argv[1]).execute(
+    "select k.version from users u join user_kdf k on k.user_id = u.id where u.username = 'pkbrowser'").fetchall()
+assert rows == [(2,)], f"the web registration did not use key derivation version 2: {rows}"
+print("ok - the web registration used key derivation version 2")
+PY

@@ -80,16 +80,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($mode === 'login') {
         $username = trim($_POST['username'] ?? '');
         $password = $_POST['password'] ?? '';
+        $legacy   = posted_legacy_key();
         unset($_SESSION['login2'], $_SESSION['pk_login']);
 
-        $res = login_key_ok($password) ? $api->login($username, $password) : ['detail' => t(LOGIN_KEY_ERROR)];
+        $res = login_key_ok($password) ? $api->login($username, $password, null, $legacy) : ['detail' => t(LOGIN_KEY_ERROR)];
         if (isset($res['access_token'])) {
             save_session($res['access_token'], $username);
             header('Location: dashboard.php');
             exit;
         } elseif (($res['detail'] ?? '') === 'TOTP_REQUIRED') {
             // The password was right: the second step asks only for the passkey or the code
-            $_SESSION['login2'] = ['username' => $username, 'key' => $password, 'at' => time()];
+            $_SESSION['login2'] = ['username' => $username, 'key' => $password, 'legacy' => $legacy, 'at' => time()];
             $need_totp = true;
         } else {
             $error = $res['detail'] ?? $res['error'] ?? t('Login failed.');
@@ -101,7 +102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = t('The sign-in expired. Sign in again.');
             $mode = 'login';
         } else {
-            $res = $api->login($step['username'], $step['key'], trim($_POST['totp_code'] ?? ''));
+            $res = $api->login($step['username'], $step['key'], trim($_POST['totp_code'] ?? ''), $step['legacy'] ?? '');
             if (isset($res['access_token'])) {
                 unset($_SESSION['login2'], $_SESSION['pk_login']);
                 save_session($res['access_token'], $step['username']);
@@ -133,8 +134,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $email     = trim($_POST['email'] ?? '');
         $password  = $_POST['password'] ?? '';
 
+        $kdf_version = ($_POST['kdf_version'] ?? '1') === '2' ? 2 : 1;
         $res = login_key_ok($password)
-            ? $api->register($username, $email, $password)
+            ? $api->register($username, $email, $password, $kdf_version)
             : ['detail' => t(LOGIN_KEY_ERROR)];
 
         if (isset($res['message']) && !isset($res['error']) && !isset($res['detail'])) {
@@ -156,7 +158,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $pw_tried = $error !== '' && ($_POST['mode'] ?? '') === 'login';
 // Second step: offer the passkey when the account has one (the password was right, so this reveals nothing)
 if ($need_totp && ($step = login2())) {
-    $pk = (new ApiClient())->passkey_begin($step['username'], $step['key']);
+    $pk = (new ApiClient())->passkey_begin($step['username'], $step['key'], $step['legacy'] ?? '');
     if (isset($pk['options'], $pk['session'])) {
         $_SESSION['pk_login'] = ['session' => $pk['session'], 'username' => $step['username']];
         $passkey_options = $pk['options'];
@@ -467,9 +469,11 @@ if ($need_totp && ($step = login2())) {
   </div>
   <div id="reg-warn" class="alert alert-error" style="<?= $mode === 'register' ? '' : 'display:none' ?>"><?= t('Creating the account here sends your password through a page this server controls. If you do not fully trust the server, create it with the app instead (<code>cryptclient setup</code>).') ?></div>
 
-  <form method="POST" id="form" data-derive style="<?= $mode === 'login' && !$pw_tried ? 'display:none' : '' ?>">
+  <form method="POST" id="form" data-derive data-kdf-salt="<?= htmlspecialchars(kdf_salt()) ?>" style="<?= $mode === 'login' && !$pw_tried ? 'display:none' : '' ?>">
     <?= csrf_field() ?>
     <input type="hidden" name="mode" id="mode-input" value="<?= htmlspecialchars($mode) ?>">
+    <input type="hidden" name="legacy_password" value="">
+    <input type="hidden" name="kdf_version" value="1">
 
     <div class="field">
       <label><?= t('Username') ?></label>

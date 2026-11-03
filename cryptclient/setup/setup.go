@@ -121,18 +121,18 @@ func Run(env Env) (*Result, error) {
 		return nil, fail(ui, fmt.Errorf("the password must be at least %d characters", MinPasswordLen),
 			"A sentence of a few words works well, for example: purple tractors sing quietly.")
 	}
-	keys, err := e2ee.Derive(username, password)
+	ks, err := e2ee.DeriveSet(info.KdfSalt, username, password)
 	if err != nil {
 		return nil, fail(ui, err, "")
 	}
 
 	// 4. The account
-	err = login(api, ui, username, keys)
+	err = login(api, ui, username, ks)
 	switch {
 	case err == nil:
 		ui.Say("You already have an account: continuing.")
 	case isNotVerified(err):
-		if err := waitForVerification(env, api, username, keys); err != nil {
+		if err := waitForVerification(env, api, username, ks); err != nil {
 			return nil, err
 		}
 	case strings.Contains(err.Error(), "Invalid username or password"):
@@ -147,12 +147,12 @@ func Run(env Env) (*Result, error) {
 		ui.Say("Your files are encrypted with this password. Nobody can reset it for you.")
 		ui.Say("If you forget it, only the recovery code you get at the end brings your files back.")
 		email := strings.TrimSpace(ui.Ask("Your e-mail address: "))
-		if err := api.Register(username, email, keys.AuthKey); err != nil {
+		if err := api.RegisterVersion(username, email, ks.Current.AuthKey, ks.Version); err != nil {
 			return nil, fail(ui, fmt.Errorf("could not create the account: %w", err), "")
 		}
 		res.NewAccount = true
 		ui.Say("Account created. We sent a message to %s.", email)
-		if err := waitForVerification(env, api, username, keys); err != nil {
+		if err := waitForVerification(env, api, username, ks); err != nil {
 			return nil, err
 		}
 	default:
@@ -210,9 +210,18 @@ func Run(env Env) (*Result, error) {
 	pinned.Token, pinned.RefreshToken = api.Token, api.RefreshToken
 	api = pinned
 	if api.Token == "" {
-		if err := login(api, ui, username, keys); err != nil {
+		if err := login(api, ui, username, ks); err != nil {
 			return nil, fail(ui, err, "")
 		}
+	}
+	// The login key the server knows for this account: version 1 until the account has moved over
+	keys := ks.Current
+	if ks.Legacy != nil {
+		v, err := api.KdfVersion()
+		if err != nil {
+			return nil, fail(ui, err, "")
+		}
+		keys = ks.For(v)
 	}
 	if err := api.RegisterKey(pub, keys.AuthKey); err != nil {
 		var wait *apiclient.KeyPendingError
@@ -253,9 +262,15 @@ func Run(env Env) (*Result, error) {
 		}
 		return ui.Confirm("Do you agree that your organisation keeps this copy? (yes/no): ")
 	}
-	init, err := volume.Init(conn, volume.InitParams{API: api, Info: info, Keys: keys, ConsentEscrow: consent})
+	init, err := volume.Init(conn, volume.InitParams{API: api, Info: info, Keys: ks.Current, ConsentEscrow: consent})
 	if err != nil {
 		return nil, fail(ui, err, "")
+	}
+	if keys != ks.Current {
+		// a new volume under the current key derivation: move the login key too (else the next connect does)
+		if err := api.UpgradeKdf(keys.AuthKey, ks.Current.AuthKey, ""); err != nil {
+			ui.Say("Note: your sign-in moves to the new key derivation the next time you connect (%v).", err)
+		}
 	}
 	// What the user has now seen; the client warns when the server's setting changes later
 	if rec, rerr := escrowcheck.FromServer(info); rerr == nil && usbMount != "" {
@@ -354,10 +369,11 @@ func sealStick(env Env, api *apiclient.Client, blob, pem []byte, password string
 	}
 }
 
-func login(api *apiclient.Client, ui UI, username string, keys *e2ee.Keys) error {
-	_, err := api.Login(username, keys.AuthKey, "")
+func login(api *apiclient.Client, ui UI, username string, ks *e2ee.KeySet) error {
+	_, err := api.LoginKeys(username, ks.Current.AuthKey, ks.LegacyAuthKey(), "")
 	if errors.Is(err, apiclient.ErrTOTPRequired) {
-		_, err = api.Login(username, keys.AuthKey, strings.TrimSpace(ui.Ask("Verification code (authenticator app): ")))
+		_, err = api.LoginKeys(username, ks.Current.AuthKey, ks.LegacyAuthKey(),
+			strings.TrimSpace(ui.Ask("Verification code (authenticator app): ")))
 	}
 	return err
 }
@@ -367,14 +383,14 @@ func isNotVerified(err error) bool {
 }
 
 // waitForVerification waits until the user has clicked the link in the e-mail.
-func waitForVerification(env Env, api *apiclient.Client, username string, keys *e2ee.Keys) error {
+func waitForVerification(env Env, api *apiclient.Client, username string, ks *e2ee.KeySet) error {
 	ui := env.UI
 	tries := env.MaxVerifyTries
 	if tries == 0 {
 		tries = 20
 	}
 	for i := 0; i < tries; i++ {
-		err := login(api, ui, username, keys)
+		err := login(api, ui, username, ks)
 		if err == nil {
 			return nil
 		}

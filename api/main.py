@@ -57,6 +57,7 @@ from database import SessionLocal, get_db, init_db
 from models import PendingChange, StickLock, StickSecret, User, WebAuthnCredential
 import passkeys
 import sticks
+import kdf
 import version
 from schemas import (
     PasskeyDeleteRequest,
@@ -69,6 +70,7 @@ from schemas import (
     CancelChangeRequest,
     ChangeResponse,
     DeleteRequest,
+    KdfUpgradeRequest,
     LoginRequest,
     MessageResponse,
     StickCreateRequest,
@@ -330,6 +332,7 @@ def on_startup():
     logger.info("Database initialized.")
     with SessionLocal() as db:
         escrow_state.check_at_startup(db, _notify_all)
+        kdf.ensure_salt(db)
     pending.start_worker(SessionLocal, float(os.getenv("CHANGE_WORKER_INTERVAL", "300")))
 
 
@@ -370,6 +373,7 @@ def register(request: Request, req: RegisterRequest, db: Session = Depends(get_d
         quota_bytes=config.default_quota_bytes(),
     )
     db.add(user)
+    kdf.set_version(db, user.id, req.kdf_version)
     db.commit()
     db.refresh(user)
 
@@ -420,7 +424,7 @@ def verify_email(request: Request, req: VerifyEmailRequest, db: Session = Depend
 @limiter.limit("10/minute")
 def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
     """Login with the derived login key. Returns a JWT access token and a refresh token."""
-    user = _password_login(request, db, req.username, req.password)
+    user, login_key = _password_login(request, db, req.username, req.password, req.legacy_password)
     _check_second_factor(request, db, user, req.totp_code)
     second_factor_at = int(time.time()) if user.totp_enabled else None
 
@@ -428,7 +432,7 @@ def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
               ip_address=get_client_ip(request))
     user.last_login = datetime.utcnow()
     if password_needs_rehash(user.password_hash):
-        user.password_hash = hash_password(req.password)   # bcrypt -> Argon2id upgrade
+        user.password_hash = hash_password(login_key)   # bcrypt -> Argon2id upgrade
     db.commit()
 
     if req.web:
@@ -444,8 +448,13 @@ def _web_session(user: User, second_factor_at: Optional[int]) -> dict:
     return {"access_token": create_access_token(user.id, user.token_version or 0, second_factor_at, web=True)}
 
 
-def _password_login(request: Request, db: Session, username: str, password: str) -> User:
-    """The first login step (throttled, audited): the user, if the login key is right."""
+def _password_login(request: Request, db: Session, username: str, password: str,
+                    legacy_password: Optional[str] = None) -> tuple[User, str]:
+    """The first login step (throttled, audited): the user and the login key that matched, if it is right.
+
+    A client that knows this server's kdf_salt sends the version 2 key as password and the version 1
+    key as legacy_password (kdf.py); an account not yet moved to version 2 is checked against the latter.
+    Exactly one slow hash either way, so the timing does not tell the versions or the users apart."""
     ip = get_client_ip(request)
     name_key = username.strip().lower()
     ip_key = f"{ip}|{name_key}"
@@ -462,7 +471,8 @@ def _password_login(request: Request, db: Session, username: str, password: str)
 
     # Always hash-verify (against a dummy hash if the user does not exist) so the
     # response time does not reveal whether a username is registered.
-    password_ok = verify_password(password, user.password_hash if user else DUMMY_HASH)
+    login_key = kdf.login_key_for(kdf.version_of(db, user.id) if user else kdf.CURRENT, password, legacy_password)
+    password_ok = verify_password(login_key, user.password_hash if user else DUMMY_HASH)
 
     # Do not log user_id on login_failed to avoid leaking username existence.
     if not user or not password_ok:
@@ -479,7 +489,7 @@ def _password_login(request: Request, db: Session, username: str, password: str)
 
     if REQUIRE_EMAIL_VERIFICATION and not user.email_verified:
         raise HTTPException(status_code=403, detail="Email not verified. Check your inbox.")
-    return user
+    return user, login_key
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +511,7 @@ def _user_passkeys(db: Session, user_id: str) -> list[WebAuthnCredential]:
 def passkey_login_begin(request: Request, req: PasskeyLoginBegin, db: Session = Depends(get_db)):
     """Login step 2 with a passkey instead of a code: the password first, then the browser's options."""
     _passkeys_or_fail()
-    user = _password_login(request, db, req.username, req.password)
+    user, _ = _password_login(request, db, req.username, req.password, req.legacy_password)
     creds = _user_passkeys(db, user.id)
     if not creds or not user.totp_enabled:
         # Reached only with the right password, so this does not reveal accounts to guessers.
@@ -934,8 +944,10 @@ def refresh_token(request: Request, req: RefreshRequest, db: Session = Depends(g
 # ---------------------------------------------------------------------------
 
 @app.get("/users/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_user_for_enrolment)):
-    return current_user
+def get_me(current_user: User = Depends(get_user_for_enrolment), db: Session = Depends(get_db)):
+    me = UserResponse.model_validate(current_user)
+    me.kdf_version = kdf.version_of(db, current_user.id)
+    return me
 
 
 @app.put("/users/me/ssh-key", response_model=ChangeResponse)
@@ -1026,6 +1038,7 @@ def change_password(
     _verify_password_or_fail(request, db, current_user, req.current_password, "password_change")
     _check_second_factor_again(request, db, current_user, req.totp_code, "password_change")
     current_user.password_hash = hash_password(req.new_password)
+    kdf.set_version(db, current_user.id, req.kdf_version)
     revoke_all_refresh_tokens(current_user.id, db)
     # Access tokens issued before this change are rejected from now on
     current_user.token_version = (current_user.token_version or 0) + 1
@@ -1034,6 +1047,31 @@ def change_password(
               ip_address=get_client_ip(request))
     _notify(current_user, "The password of your account was changed.")
     return {"message": "Password changed successfully. All sessions have been logged out; log in again."}
+
+
+@app.post("/users/me/kdf-upgrade", response_model=MessageResponse)
+@limiter.limit("5/minute")
+def kdf_upgrade(
+    request: Request,
+    req: KdfUpgradeRequest,
+    current_user: User = Depends(get_full_user),
+    db: Session = Depends(get_db),
+):
+    """Move the login key to the current key derivation (kdf.py). Same password, so the sessions stay.
+
+    The client calls this after it has re-wrapped gocryptfs.conf under the new volume passphrase. It is
+    a login key change, so it asks for the same as one: the current key and a recent second factor."""
+    if is_web_session(current_user):
+        raise HTTPException(status_code=403, detail="Not available in a web session.")
+    if kdf.version_of(db, current_user.id) >= kdf.CURRENT:
+        return {"message": "Already up to date."}
+    _verify_password_or_fail(request, db, current_user, req.current_password, "kdf_upgrade")
+    _check_second_factor_again(request, db, current_user, req.totp_code, "kdf_upgrade")
+    current_user.password_hash = hash_password(req.new_password)
+    kdf.set_version(db, current_user.id, kdf.CURRENT)
+    db.commit()
+    audit_log(db, "kdf_upgraded", user_id=current_user.id, ip_address=get_client_ip(request))
+    return {"message": "Login key updated."}
 
 
 # ---------------------------------------------------------------------------
@@ -1193,7 +1231,7 @@ def _e2ee_usage(user: User) -> dict:
 
 
 @app.get("/server-info", response_model=ServerInfo)
-def server_info():
+def server_info(db: Session = Depends(get_db)):
     """What the client needs before it can create a volume. Public, contains no secrets."""
     policy, fingerprint = escrow_state.current()
     return {
@@ -1204,6 +1242,8 @@ def server_info():
         "escrow_key_fingerprint": fingerprint,
         "account_lifetime_hours": config.account_lifetime_hours() or None,
         "server_id": sticks.server_id(),
+        "kdf_version": kdf.CURRENT,
+        "kdf_salt": kdf.ensure_salt(db),
     }
 
 
@@ -1360,6 +1400,7 @@ def recover_e2ee(request: Request, req: E2EERecoverRequest, db: Session = Depend
     _check_second_factor(request, db, user, req.totp_code)
 
     user.password_hash = hash_password(req.new_password)
+    kdf.set_version(db, user.id, req.kdf_version)
     user.token_version = (user.token_version or 0) + 1
     revoke_all_refresh_tokens(user.id, db)
     db.commit()

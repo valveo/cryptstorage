@@ -194,3 +194,22 @@ class StickSecret(Base):
     name         = Column(String(64), nullable=False)    # the computer that prepared it, for the list
     created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
+
+
+class ServerSetting(Base):
+    """Values the server creates once and keeps for good, such as the key derivation salt (kdf.py).
+    In the database, so they are in its backup together with the accounts that depend on them."""
+    __tablename__ = "server_settings"
+
+    name  = Column(String(64), primary_key=True)
+    value = Column(String(255), nullable=False)
+
+
+class UserKdf(Base):
+    """Which key derivation an account's login key comes from (kdf.py). No row: version 1, the
+    username-only salt of v0.1.0. A table of its own, so existing databases get it from create_all()."""
+    __tablename__ = "user_kdf"
+
+    user_id    = Column(String(36), primary_key=True)
+    version    = Column(Integer, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)

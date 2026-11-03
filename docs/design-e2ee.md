@@ -395,17 +395,31 @@ Escrow lets the operator read everything, so the user must always know whether i
 ## 5a. One password, two keys (decided design)
 
 ```
-root       = Argon2id(password, salt = SHA-256("secdisk/kdf/v1" 0x00 lower(username)), t=3, m=64 MiB, p=4)
+salt v1    = SHA-256("secdisk/kdf/v1" 0x00 lower(username))                               (0.1.0)
+salt v2    = SHA-256("cryptstorage/kdf/v2" 0x00 || kdf_salt (32 bytes) || lower(username)) (0.1.1 on)
+root       = Argon2id(password, salt, t=3, m=64 MiB, p=4)
 AuthKey    = HKDF-SHA256(root, info "secdisk/auth/v1")      -> sent to the server, which stores Argon2id(AuthKey)
 VolumePass = HKDF-SHA256(root, info "secdisk/volume/v1")    -> hex text, the gocryptfs passphrase, never leaves the client
 ```
 
 - The server gets only `AuthKey`. It cannot compute `VolumePass` from it (different HKDF labels, one-way).
-- The salt needs no round trip, so login does not reveal whether a user exists.
+- The salt needs no round trip per user, so login does not reveal whether a user exists. **Version 2** (0.1.1) adds
+  `kdf_salt`, 32 random bytes the server creates once, keeps in its database (`server_settings`) and publishes in
+  `/server-info`. With the username alone (version 1) a guesser could prepare for a known username before taking
+  any server's data, and the same username had the same salt everywhere. `kdf_salt` must never change.
+- **Moving accounts over** (`api/kdf.py`, `e2ee.DeriveSet`, `volume.UnlockSet`). The server records each account's
+  version (`user_kdf`; no row is version 1). A 0.1.1 client derives both versions and logs in with the version 2
+  key plus the version 1 key as `legacy_password`; the server checks the one the account uses (one slow hash
+  either way). On connect the client re-wraps `gocryptfs.conf` under the version 2 passphrase if only the version 1
+  one opens it, then calls `POST /users/me/kdf-upgrade` (current key and a recent second factor, like a password
+  change). The two steps are independent, so an interruption between them is repaired on the next connect. After
+  the move a 0.1.0 client can no longer sign in. The HKDF labels (`secdisk/auth/v1`, `secdisk/volume/v1`) are the
+  same in both versions: the roots differ.
 - **The password must not be sent to the server at all**, otherwise the server could derive `VolumePass`. That includes the PHP web UI: it must derive `AuthKey` in the browser (JavaScript, Argon2id compiled to WebAssembly, served from our own origin with a pinned hash). If the web UI sent the password to PHP, the e2ee guarantee would end at the web server. This is the main usability and security cost of the single-password choice. It protects only against an honest server: the server also serves that JavaScript, so a malicious one can capture the password. The web UI has sign-ins that never put the password into the page (passkey alone, or a one-time ticket from the app); the password form stays, labelled as trusting the server.
 - Changing the password changes both keys: the client re-wraps the master key (`gocryptfs.conf`) and updates the server verifier in one operation. The data is not re-encrypted.
 - A weak password is a weakness against the server's offline guessing (it holds `gocryptfs.conf` and the verifier): the client must enforce a minimum length and show a strength hint.
 - Reference test vector (any other implementation, such as the browser one, must match): username `alice`, password `correct horse battery` gives AuthKey `267d874c...69c4` and VolumePass `fe627d1d...9b4e` (full values in `cryptclient/e2ee/e2ee_test.go`, also reproduced independently in Python).
+- Version 2 vector: the same user and password with `kdf_salt` = bytes 0x00..0x1f give AuthKey `b38ae604...e5d5` and VolumePass `1da42a3b...e40c` (`TestDeriveV2Vector`, `webui/assets/derive.test.mjs`, reproduced with argon2-cffi).
 
 ## 12a. Spike results (2026-10-24)
 

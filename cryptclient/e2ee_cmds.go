@@ -121,17 +121,52 @@ func checkE2EE(api *apiclient.Client) (*apiclient.ServerInfo, error) {
 }
 
 // loginE2EE logs in with the derived login key and asks for a two-factor code when needed.
-func loginE2EE(api *apiclient.Client, username string, keys *e2ee.Keys) error {
-	return loginWith(terminal, api, username, keys)
+// It returns the keys of the account's own key derivation version (see accountKeys).
+func loginE2EE(api *apiclient.Client, username string, ks *e2ee.KeySet) (*e2ee.Keys, error) {
+	return loginWith(terminal, api, username, ks)
 }
 
-func loginWith(a asker, api *apiclient.Client, username string, keys *e2ee.Keys) error {
-	_, err := api.Login(username, keys.AuthKey, "")
+func loginWith(a asker, api *apiclient.Client, username string, ks *e2ee.KeySet) (*e2ee.Keys, error) {
+	if err := loginSteps(a, api, username, ks); err != nil {
+		return nil, err
+	}
+	return accountKeys(api, ks)
+}
+
+// accountKeys picks, after a login, the keys of the version the account's login key is: until the account
+// has moved over (upgradeKdf), the server knows only its version 1 key.
+func accountKeys(api *apiclient.Client, ks *e2ee.KeySet) (*e2ee.Keys, error) {
+	if ks.Legacy == nil {
+		return ks.Current, nil
+	}
+	v, err := api.KdfVersion()
+	if err != nil {
+		return nil, err
+	}
+	return ks.For(v), nil
+}
+
+// upgradeKdf moves a version 1 account's login key to the current key derivation, once the volume has
+// been moved (volume.UnlockSet). Not fatal: the old key keeps working, and the next connect tries again.
+func upgradeKdf(api *apiclient.Client, ks *e2ee.KeySet, keys *e2ee.Keys, tell func(string)) {
+	if ks.Legacy == nil || keys != ks.Legacy {
+		return
+	}
+	if err := api.UpgradeKdf(ks.Legacy.AuthKey, ks.Current.AuthKey, ""); err != nil {
+		tell(fmt.Sprintf("Note: your sign-in was not moved to the new key derivation yet (%v). It is tried again the next time you connect.", err))
+		return
+	}
+	tell("✓ Your sign-in now uses this server's own salt (CryptStorage 0.1.1). Update the app on your other computers too: older versions can no longer sign in.")
+}
+
+func loginSteps(a asker, api *apiclient.Client, username string, ks *e2ee.KeySet) error {
+	keys, legacy := ks.Current, ks.LegacyAuthKey()
+	_, err := api.LoginKeys(username, keys.AuthKey, legacy, "")
 	if !errors.Is(err, apiclient.ErrTOTPRequired) {
 		return err
 	}
 	label := "Verification code (authenticator app or backup code): "
-	pk, perr := api.PasskeyBegin(username, keys.AuthKey)
+	pk, perr := api.PasskeyBeginKeys(username, keys.AuthKey, legacy)
 	if perr == nil && pk.ApproveURL != "" {
 		label = "Press Enter to approve with your passkey in the browser, or type the code from your authenticator app: "
 	}
@@ -150,7 +185,7 @@ func loginWith(a asker, api *apiclient.Client, username string, keys *e2ee.Keys)
 			},
 			func(cred json.RawMessage) error { return api.PasskeyFinish(pk.Session, cred) })
 	}
-	_, err = api.Login(username, keys.AuthKey, code)
+	_, err = api.LoginKeys(username, keys.AuthKey, legacy, code)
 	return err
 }
 
@@ -283,15 +318,15 @@ func hostKeys(usbMount string) *sshconn.HostKeyManager {
 
 func cmdRegister() {
 	api := newAPI("")
-	requireE2EE(api)
+	info := requireE2EE(api)
 	username := promptLine("Choose a username: ")
 	email := promptLine("E-mail address: ")
 	password := promptNewPassword("Choose a password: ")
-	keys, err := e2ee.Derive(username, password)
+	ks, err := e2ee.DeriveSet(info.KdfSalt, username, password)
 	if err != nil {
 		fatal("%v", err)
 	}
-	if err := api.Register(username, email, keys.AuthKey); err != nil {
+	if err := api.RegisterVersion(username, email, ks.Current.AuthKey, ks.Version); err != nil {
 		fatal("Registration failed: %v", err)
 	}
 	fmt.Println("✓ Account created. Check your e-mail and confirm the address, then run:")
@@ -313,11 +348,12 @@ func cmdInitStorage() {
 	if err := checkStickServer(st.usbMount, info); err != nil {
 		fatal("%v", err)
 	}
-	keys, err := e2ee.Derive(username, password)
+	ks, err := e2ee.DeriveSet(info.KdfSalt, username, password)
 	if err != nil {
 		fatal("%v", err)
 	}
-	if err := loginE2EE(api, username, keys); err != nil {
+	keys, err := loginE2EE(api, username, ks)
+	if err != nil {
 		fatal("Login failed: %v", err)
 	}
 	if err := st.open(terminal, api); err != nil {
@@ -342,10 +378,11 @@ func cmdInitStorage() {
 	rememberStickServer(st.usbMount, info, storage.SSHHostKeys, say)
 
 	fmt.Println("Creating your encrypted storage...")
-	res, err := volume.Init(conn, volume.InitParams{API: api, Info: info, Keys: keys, ConsentEscrow: escrowConsent(terminal)})
+	res, err := volume.Init(conn, volume.InitParams{API: api, Info: info, Keys: ks.Current, ConsentEscrow: escrowConsent(terminal)})
 	if err != nil {
 		fatal("%v", err)
 	}
+	upgradeKdf(api, ks, keys, say)
 	rememberEscrow(st.usbMount, info)
 	fmt.Println("✅ Your encrypted storage is ready. Only you can read what you put in it.")
 	if res.RecoveryCode != "" {
@@ -385,11 +422,12 @@ func openE2EE(a asker, st *stick, username string) error {
 	if err := checkEscrow(a, st.usbMount, info); err != nil {
 		return err
 	}
-	keys, err := e2ee.Derive(username, st.password)
+	ks, err := e2ee.DeriveSet(info.KdfSalt, username, st.password)
 	if err != nil {
 		return err
 	}
-	if err := loginWith(a, api, username, keys); err != nil {
+	keys, err := loginWith(a, api, username, ks)
+	if err != nil {
 		return fmt.Errorf("Login failed: %w", err)
 	}
 	if err := st.open(a, api); err != nil {
@@ -418,13 +456,18 @@ func openE2EE(a asker, st *stick, username string) error {
 		conn.Close()
 		return fmt.Errorf("Could not create %s: %v", mountPoint, err)
 	}
-	if err := volume.Unlock(conn, keys, mountPoint); err != nil {
+	moved, err := volume.UnlockSet(conn, ks, mountPoint)
+	if err != nil {
 		conn.Close()
 		if errors.Is(err, e2ee.ErrWrongPassphrase) {
 			return errors.New("The password does not open the storage.")
 		}
 		return err
 	}
+	if moved {
+		tell("✓ Your storage now uses this server's own salt for the password (CryptStorage 0.1.1). The files were not touched.")
+	}
+	upgradeKdf(api, ks, keys, tell)
 	openVolume = &activeVolume{conn: conn, plain: mountPoint, api: api, username: username}
 	return nil
 }
@@ -474,16 +517,19 @@ func cmdChangePassword() {
 	st := unlockStick(oldPw)
 	defer st.wipe()
 	api := newAPI(st.usbMount)
-	if err := checkStickServer(st.usbMount, requireE2EE(api)); err != nil {
+	info := requireE2EE(api)
+	if err := checkStickServer(st.usbMount, info); err != nil {
 		fatal("%v", err)
 	}
 	newPw := promptNewPassword("New password: ")
-	oldKeys, _ := e2ee.Derive(username, oldPw)
-	newKeys, err := e2ee.Derive(username, newPw)
-	if err != nil || oldKeys == nil {
+	oldKS, _ := e2ee.DeriveSet(info.KdfSalt, username, oldPw)
+	newKS, err := e2ee.DeriveSet(info.KdfSalt, username, newPw)
+	if err != nil || oldKS == nil {
 		fatal("could not derive keys")
 	}
-	if err := loginE2EE(api, username, oldKeys); err != nil {
+	newKeys := newKS.Current
+	oldKeys, err := loginE2EE(api, username, oldKS)
+	if err != nil {
 		fatal("Login failed: %v", err)
 	}
 	if err := st.open(terminal, api); err != nil {
@@ -507,14 +553,14 @@ func cmdChangePassword() {
 	if err != nil {
 		fatal("Could not prepare the stick's key for the new password: %v", err)
 	}
-	restore, err := volume.Rewrap(conn, oldKeys.VolumePassphrase, newKeys.VolumePassphrase)
+	restore, err := volume.RewrapAny(conn, oldKS.Passphrases(), newKeys.VolumePassphrase)
 	if err != nil {
 		fatal("%v", err)
 	}
-	err = api.ChangeLoginKey(oldKeys.AuthKey, newKeys.AuthKey, "")
+	err = api.ChangeLoginKeyVersion(oldKeys.AuthKey, newKeys.AuthKey, "", newKS.Version)
 	if errors.Is(err, apiclient.ErrTOTPRequired) {
-		err = api.ChangeLoginKey(oldKeys.AuthKey, newKeys.AuthKey,
-			promptLine("Verification code (authenticator app or backup code): "))
+		err = api.ChangeLoginKeyVersion(oldKeys.AuthKey, newKeys.AuthKey,
+			promptLine("Verification code (authenticator app or backup code): "), newKS.Version)
 	}
 	if err != nil {
 		if rerr := restore(); rerr != nil {
@@ -546,10 +592,6 @@ func cmdRecoverE2EE() {
 	}
 	proof, _ := e2ee.RecoveryProof(mk)
 	newPw := promptNewPassword("Choose a NEW password: ")
-	keys, err := e2ee.Derive(username, newPw)
-	if err != nil {
-		fatal("%v", err)
-	}
 
 	devicePath := os.Getenv("CRYPTCLIENT_DEVICE")
 	if devicePath == "" {
@@ -565,19 +607,25 @@ func cmdRecoverE2EE() {
 	if err := checkStickServer(usbMount, info); err != nil {
 		fatal("%v", err)
 	}
+	ks, err := e2ee.DeriveSet(info.KdfSalt, username, newPw)
+	if err != nil {
+		fatal("%v", err)
+	}
+	keys := ks.Current // the volume is re-wrapped under the current version below
 
 	// Safe to repeat: if the server already accepted the new password, skip the reset.
-	if err := loginE2EE(api, username, keys); err != nil {
-		err := api.RecoverE2EE(username, proof, keys.AuthKey, "")
+	loginKeys, err := loginE2EE(api, username, ks)
+	if err != nil {
+		err := api.RecoverE2EEVersion(username, proof, keys.AuthKey, "", ks.Version)
 		if errors.Is(err, apiclient.ErrTOTPRequired) {
 			// The recovery code replaces the password, not the second factor
-			err = api.RecoverE2EE(username, proof, keys.AuthKey,
-				promptLine("Verification code (authenticator app or backup code): "))
+			err = api.RecoverE2EEVersion(username, proof, keys.AuthKey,
+				promptLine("Verification code (authenticator app or backup code): "), ks.Version)
 		}
 		if err != nil {
 			fatal("Recovery failed: %v", err)
 		}
-		if err := loginE2EE(api, username, keys); err != nil {
+		if loginKeys, err = loginE2EE(api, username, ks); err != nil {
 			fatal("Login with the new password failed: %v", err)
 		}
 	}
@@ -622,7 +670,7 @@ func cmdRecoverE2EE() {
 	if err != nil {
 		fatal("%v", err)
 	}
-	registerKey(api, pub, keys.AuthKey)
+	registerKey(api, pub, loginKeys.AuthKey)
 	storage, err := api.E2EEStorage()
 	if err != nil {
 		fatal("%v", err)
@@ -641,6 +689,7 @@ func cmdRecoverE2EE() {
 	if _, err := volume.Recover(conn, mk, keys.VolumePassphrase); err != nil {
 		fatal("%v", err)
 	}
+	upgradeKdf(api, ks, loginKeys, say) // only if an earlier run left the login key at version 1
 	fmt.Println("✅ Recovered. Your files are intact and the new password now opens them.")
 	fmt.Println("   Run `cryptclient connect` as usual.")
 }

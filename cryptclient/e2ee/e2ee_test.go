@@ -118,3 +118,50 @@ func TestRealGocryptfsAcceptsOurConfig(t *testing.T) {
 		t.Fatal("gocryptfs accepted a wrong passphrase")
 	}
 }
+
+// Version 2 salts with the server's kdf_salt. The same vector is checked by webui/assets/derive.test.mjs
+// and was reproduced independently with argon2-cffi and cryptography in Python.
+func TestDeriveV2Vector(t *testing.T) {
+	serverSalt := make([]byte, 32)
+	for i := range serverSalt {
+		serverSalt[i] = byte(i)
+	}
+	k, err := DeriveV2(serverSalt, " Alice ", "correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.AuthKey != "b38ae6047a72ec83205ac71fd8d8d9bf839c49575263db45e2630787162ee5d5" ||
+		string(k.VolumePassphrase) != "1da42a3baceb922c8c853404024f7c9bda7e5bd35fff70355b54f038062fe40c" {
+		t.Fatalf("v2 vector changed: %s %s", k.AuthKey, k.VolumePassphrase)
+	}
+	if _, err := DeriveV2(serverSalt[:31], "alice", "x"); err == nil {
+		t.Fatal("a short server salt must be refused")
+	}
+}
+
+func TestDeriveSet(t *testing.T) {
+	old, err := DeriveSet("", "alice", "correct horse battery")
+	if err != nil || old.Version != 1 || old.Legacy != nil || old.LegacyAuthKey() != "" {
+		t.Fatalf("older server: %+v %v", old, err)
+	}
+	if old.Current.AuthKey != "267d874caa4f5ad25ba061432ded57a0b369e31f327032d509f2a88363a569c4" {
+		t.Fatal("older server must get the version 1 keys")
+	}
+	saltHex := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+	s, err := DeriveSet(saltHex, "alice", "correct horse battery")
+	if err != nil || s.Version != 2 {
+		t.Fatal(err)
+	}
+	if s.Current.AuthKey != "b38ae6047a72ec83205ac71fd8d8d9bf839c49575263db45e2630787162ee5d5" ||
+		s.LegacyAuthKey() != old.Current.AuthKey {
+		t.Fatal("wrong keys in the set")
+	}
+	if s.For(1) != s.Legacy || s.For(2) != s.Current || len(s.Passphrases()) != 2 {
+		t.Fatal("For/Passphrases")
+	}
+	for _, bad := range []string{"zz", "0001", saltHex + "00"} {
+		if _, err := DeriveSet(bad, "alice", "x"); err == nil {
+			t.Fatalf("malformed salt %q accepted", bad)
+		}
+	}
+}

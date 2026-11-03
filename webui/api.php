@@ -15,15 +15,23 @@ class ApiClient {
 
     // --- Auth ---
 
-    public function register(string $username, string $email, string $password): array {
-        $body = ['username' => $username, 'email' => $email, 'password' => $password];
+    // $kdf_version: the key derivation the browser used (assets/derive.js, api/kdf.py)
+    public function register(string $username, string $email, string $password, int $kdf_version = 1): array {
+        $body = ['username' => $username, 'email' => $email, 'password' => $password, 'kdf_version' => $kdf_version];
         return $this->post('/auth/register', $body);
+    }
+
+    // Public: the server's key derivation salt (kdf_salt) for the sign-in form
+    public function server_info(): array {
+        return $this->get('/server-info');
     }
 
     // Every sign-in here asks for a web session: it manages the account, never opens the storage,
     // and confirms sensitive actions with a recent sign-in instead of the password
-    public function login(string $username, string $password, ?string $totp_code = null): array {
+    // $legacy: the version 1 login key, for an account not yet moved to version 2 (api/kdf.py)
+    public function login(string $username, string $password, ?string $totp_code = null, string $legacy = ''): array {
         $body = ['username' => $username, 'password' => $password, 'web' => true];
+        if ($legacy !== '') { $body['legacy_password'] = $legacy; }
         if ($totp_code !== null && $totp_code !== '') { $body['totp_code'] = $totp_code; }
         return $this->post('/auth/login', $body);
     }
@@ -40,8 +48,10 @@ class ApiClient {
     }
 
     // Passkeys (WebAuthn): options for the browser and a session that comes back with its answer
-    public function passkey_begin(string $username, string $password): array {
-        return $this->post('/auth/passkey/begin', ['username' => $username, 'password' => $password]);
+    public function passkey_begin(string $username, string $password, string $legacy = ''): array {
+        $body = ['username' => $username, 'password' => $password];
+        if ($legacy !== '') { $body['legacy_password'] = $legacy; }
+        return $this->post('/auth/passkey/begin', $body);
     }
     public function passkey_finish(string $session, array $credential): array {
         return $this->post('/auth/passkey/finish', ['session' => $session, 'credential' => $credential, 'web' => true]);
