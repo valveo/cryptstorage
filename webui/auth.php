@@ -97,6 +97,27 @@ function login_key_ok(string $v): bool {
     return preg_match('/^[0-9a-f]{64}$/', $v) === 1;
 }
 
+// The version 1 login key the browser sends next to the version 2 one (assets/derive.js), or ''.
+function posted_legacy_key(): string {
+    $v = $_POST['legacy_password'] ?? '';
+    return is_string($v) && login_key_ok($v) ? $v : '';
+}
+
+// The server's key derivation salt (64 hex) for the sign-in form; '' when the API does not publish one,
+// and the browser then derives the version 1 key. Asked once per PHP session.
+function kdf_salt(): string {
+    require_once __DIR__ . '/api.php';
+    if (!isset($_SESSION['kdf_salt'])) {
+        $info = (new ApiClient())->server_info();
+        $salt = $info['kdf_salt'] ?? '';
+        if (!is_string($salt) || preg_match('/^[0-9a-f]{64}$/', $salt) !== 1) {
+            return '';
+        }
+        $_SESSION['kdf_salt'] = $salt;
+    }
+    return $_SESSION['kdf_salt'];
+}
+
 const LOGIN_KEY_ERROR = 'Your browser could not prepare the password securely. Allow scripts for this page, or use a current browser.';
 
 // Loads the derivation script (after the page's own scripts, so a cancelled confirm() is seen first).

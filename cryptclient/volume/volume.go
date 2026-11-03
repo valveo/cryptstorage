@@ -225,20 +225,43 @@ func Init(c *Conn, p InitParams) (*InitResult, error) {
 // Unlock checks the passphrase against gocryptfs.conf (with limits on a hostile config) and mounts
 // the plaintext view at plainDir.
 func Unlock(c *Conn, keys *e2ee.Keys, plainDir string) error {
+	_, err := UnlockSet(c, &e2ee.KeySet{Current: keys, Version: 1}, plainDir)
+	return err
+}
+
+// UnlockSet is Unlock for the keys of one password (e2ee.DeriveSet). A volume still wrapped under the
+// version 1 passphrase is re-wrapped under the current one first (the data is not re-encrypted), and
+// moved reports that it was. The volume passphrase is independent of the login key, so this works
+// whether or not the server has moved the login key over yet.
+func UnlockSet(c *Conn, ks *e2ee.KeySet, plainDir string) (moved bool, err error) {
 	conf, err := os.ReadFile(c.confPath())
 	if err != nil {
-		return errors.New("no volume found for this account: run init-storage first")
+		return false, errors.New("no volume found for this account: run init-storage first")
 	}
-	if mk, err := e2ee.ReadMasterKey(conf, keys.VolumePassphrase); err != nil {
-		return err
-	} else {
-		wipe(mk)
+	mk, err := e2ee.ReadMasterKey(conf, ks.Current.VolumePassphrase)
+	if errors.Is(err, e2ee.ErrWrongPassphrase) && ks.Legacy != nil {
+		if mk, err = e2ee.ReadMasterKey(conf, ks.Legacy.VolumePassphrase); err == nil {
+			if _, err = replaceConf(c, conf, mk, ks.Current.VolumePassphrase); err != nil {
+				wipe(mk)
+				return false, fmt.Errorf("could not move the volume to the new key derivation: %w", err)
+			}
+			moved = true
+		}
 	}
+	if err != nil {
+		return false, err
+	}
+	wipe(mk)
 	// A previous config left by an older client or an interrupted change would let the old password in
+	// (after a move above: the version 1 config, which the same password still opens)
 	if err := DropBackup(c); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not remove the previous volume config from the server: %v\n", err)
 	}
-	if err := e2ee.MountVolume(c.CipherDir, plainDir, keys.VolumePassphrase); err != nil {
+	return moved, mountChecked(c, ks.Current.VolumePassphrase, plainDir)
+}
+
+func mountChecked(c *Conn, passphrase []byte, plainDir string) error {
+	if err := e2ee.MountVolume(c.CipherDir, plainDir, passphrase); err != nil {
 		return err
 	}
 	// The passphrase opened gocryptfs.conf, so the key is right: put back a check file the user deleted,
@@ -255,11 +278,23 @@ func Unlock(c *Conn, keys *e2ee.Keys, plainDir string) error {
 // gocryptfs.conf.bak until the caller has finished the change and calls DropBackup; Restore puts it back
 // if a later step fails.
 func Rewrap(c *Conn, oldPass, newPass []byte) (restore func() error, err error) {
+	return RewrapAny(c, [][]byte{oldPass}, newPass)
+}
+
+// RewrapAny is Rewrap when the old passphrase is one of several (the current and the version 1 one
+// of the same password, e2ee.KeySet.Passphrases): the first that opens the config is used.
+func RewrapAny(c *Conn, oldPasses [][]byte, newPass []byte) (restore func() error, err error) {
 	conf, err := os.ReadFile(c.confPath())
 	if err != nil {
 		return nil, err
 	}
-	mk, err := e2ee.ReadMasterKey(conf, oldPass)
+	var mk []byte
+	err = e2ee.ErrWrongPassphrase
+	for _, p := range oldPasses {
+		if mk, err = e2ee.ReadMasterKey(conf, p); !errors.Is(err, e2ee.ErrWrongPassphrase) {
+			break
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -69,7 +69,8 @@ func webLoginDesktop(d desktopUI) {
 // one-time ticket.
 func webLogin(a asker, username string, password func() (string, error)) (*apiclient.WebTicket, error) {
 	api := newAPI("")
-	if _, err := checkE2EE(api); err != nil {
+	info, err := checkE2EE(api)
+	if err != nil {
 		return nil, err
 	}
 	if username = strings.TrimSpace(username); username == "" {
@@ -82,11 +83,11 @@ func webLogin(a asker, username string, password func() (string, error)) (*apicl
 	if pw == "" {
 		return nil, errors.New("no password was typed")
 	}
-	keys, err := e2ee.Derive(username, pw)
+	ks, err := e2ee.DeriveSet(info.KdfSalt, username, pw)
 	if err != nil {
 		return nil, fmt.Errorf("could not derive keys: %v", err)
 	}
-	if err := loginWith(a, api, username, keys); err != nil {
+	if _, err := loginWith(a, api, username, ks); err != nil {
 		if errors.Is(err, tray.ErrCancelled) {
 			return nil, err
 		}

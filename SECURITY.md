@@ -52,7 +52,10 @@ prototype and has not been audited.
 
 ## Cryptographic design (summary for reviewers)
 
-- One password gives two keys on the client: `root = Argon2id(password, salt from the username)`, then
+- One password gives two keys on the client: `root = Argon2id(password, salt)`, where the salt is
+  `SHA-256("cryptstorage/kdf/v2" 0x00 || kdf_salt || username)` and `kdf_salt` is 32 random bytes the server
+  creates once and publishes in `/server-info` (key derivation version 2; accounts made by 0.1.0 used the
+  username alone and move over at their next connect), then
   `AuthKey = HKDF(root, "secdisk/auth/v1")` (sent to the server, which stores an Argon2id hash of it) and
   `VolumePass = HKDF(root, "secdisk/volume/v1")` (the gocryptfs passphrase, never leaves the client). The
   web UI derives the AuthKey in the browser (Argon2id in WebAssembly); PHP refuses anything that is not a derived key.
@@ -150,7 +153,8 @@ prototype and has not been audited.
     knew the old password and holds a copy of the server's files. That needs a new master key.
   - *Recovery refused:* a replaced check file (`.secdisk-canary`) makes recovery with the right code fail.
 - **Offline guessing.** The server holds `gocryptfs.conf` and the login hash, so a weak password can be guessed
-  offline. The apps require 12 characters but do not check strength: use a long passphrase. A stick whose
+  offline. The per-server salt means the guessing can only start once the server's data is taken, and must be
+  done again for each server. The apps require 12 characters but do not check strength: use a long passphrase. A stick whose
   key is not sealed yet (an older stick before its first connect, or a server without `TOTP_ENCRYPTION_KEY`)
   can still be guessed offline, and so can a stick secret by someone who also holds a full copy of the server
   including `TOTP_ENCRYPTION_KEY`.

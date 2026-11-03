@@ -26,15 +26,19 @@ func main() {
 
 func run() error {
 	user := os.Getenv("CRYPTSTORAGE_USER")
-	keys, err := e2ee.Derive(user, os.Getenv("CRYPTSTORAGE_PASSWORD"))
+	api := apiclient.New(os.Getenv("API_URL"), "", "")
+	info, err := api.ServerInfo()
 	if err != nil {
 		return err
 	}
-	api := apiclient.New(os.Getenv("API_URL"), "", "")
-	if _, err := api.Login(user, keys.AuthKey, ""); !errors.Is(err, apiclient.ErrTOTPRequired) {
+	ks, err := e2ee.DeriveSet(info.KdfSalt, user, os.Getenv("CRYPTSTORAGE_PASSWORD"))
+	if err != nil {
+		return err
+	}
+	if _, err := api.LoginKeys(user, ks.Current.AuthKey, ks.LegacyAuthKey(), ""); !errors.Is(err, apiclient.ErrTOTPRequired) {
 		return fmt.Errorf("expected the second factor to be asked for, got %v", err)
 	}
-	pk, err := api.PasskeyBegin(user, keys.AuthKey)
+	pk, err := api.PasskeyBeginKeys(user, ks.Current.AuthKey, ks.LegacyAuthKey())
 	if err != nil {
 		return err
 	}

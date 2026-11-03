@@ -27,7 +27,7 @@ import config
 from audit import log as audit_log
 from auth import _hash_token
 from email_verification import BASE_URL, send_security_notice_email
-from models import EscrowSeal, PendingChange, StickLock, StickSecret, SyncLock, User, WebAuthnCredential
+from models import EscrowSeal, PendingChange, StickLock, StickSecret, SyncLock, User, UserKdf, WebAuthnCredential
 from socket_client import DaemonError, daemon_e2ee_delete, daemon_e2ee_provision
 
 logger = logging.getLogger(__name__)
@@ -180,6 +180,7 @@ def _apply(db: Session, change: PendingChange) -> None:
         db.query(WebAuthnCredential).filter(WebAuthnCredential.user_id == user.id).delete(synchronize_session=False)
         db.query(StickSecret).filter(StickSecret.user_id == user.id).delete(synchronize_session=False)
         db.query(StickLock).filter(StickLock.user_id == user.id).delete(synchronize_session=False)
+        db.query(UserKdf).filter(UserKdf.user_id == user.id).delete(synchronize_session=False)
         db.delete(user)
         db.commit()
         audit_log(db, "account_deleted", user_id=user_id, detail=f"change={change.id}")

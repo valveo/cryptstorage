@@ -44,6 +44,9 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     ssh_public_key: Optional[str] = None
+    # Which key derivation the login key comes from (api/kdf.py): 2 from clients that know the
+    # server's kdf_salt, 1 (the default) from older ones
+    kdf_version: int = Field(default=1, ge=1, le=2)
 
     @field_validator("username")
     @classmethod
@@ -77,6 +80,8 @@ class LoginRequest(BaseModel):
     # Upper bounds: unauthenticated input must not make the hashing expensive
     username: str = Field(max_length=64)
     password: str = Field(max_length=PASSWORD_MAX_LENGTH)
+    # A version 2 client sends its version 1 login key too, for accounts not yet moved over (kdf.py)
+    legacy_password: Optional[str] = Field(default=None, max_length=PASSWORD_MAX_LENGTH)
     # Needed when the account has a second factor: a 6-digit code or a backup code.
     totp_code: Optional[str] = Field(default=None, max_length=32)
     # A web UI session: limited to account management, no refresh token
@@ -102,6 +107,8 @@ class UserResponse(BaseModel):
     created_at: datetime
     last_login: Optional[datetime]
     totp_enabled: bool = False
+    # The key derivation of the account's login key (api/kdf.py); the app moves version 1 accounts over
+    kdf_version: int = 1
 
     model_config = {"from_attributes": True}
 
@@ -120,6 +127,21 @@ class SSHKeyUpdate(BaseModel):
 
 
 class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(max_length=PASSWORD_MAX_LENGTH)
+    new_password: str
+    totp_code: Optional[str] = Field(default=None, max_length=32)
+    # Which key derivation the login key comes from (api/kdf.py): 2 from clients that know the
+    # server's kdf_salt, 1 (the default) from older ones
+    kdf_version: int = Field(default=1, ge=1, le=2)
+
+    @field_validator("new_password")
+    @classmethod
+    def password_strong(cls, v):
+        return _check_password(v)
+
+
+class KdfUpgradeRequest(BaseModel):
+    """The same password's login key under the current key derivation (api/kdf.py)."""
     current_password: str = Field(max_length=PASSWORD_MAX_LENGTH)
     new_password: str
     totp_code: Optional[str] = Field(default=None, max_length=32)
@@ -207,6 +229,10 @@ class ServerInfo(BaseModel):
     account_lifetime_hours: Optional[float] = None
     # Stays the same for as long as the stick secrets do (sticks.server_id); the client binds a stick to it
     server_id: Optional[str] = None
+    # The key derivation new login keys use, and this server's part of its salt (64 hex, never changes;
+    # api/kdf.py). Older servers send neither, and the client then uses version 1.
+    kdf_version: int = 1
+    kdf_salt: Optional[str] = None
 
 
 class E2EEStorageResponse(BaseModel):
@@ -259,6 +285,9 @@ class E2EERecoverRequest(BaseModel):
     new_password: str = Field(max_length=PASSWORD_MAX_LENGTH)   # the new login key (64 hex)
     # Needed when the account has a second factor (a code or a backup code)
     totp_code: Optional[str] = Field(default=None, max_length=32)
+    # Which key derivation the login key comes from (api/kdf.py): 2 from clients that know the
+    # server's kdf_salt, 1 (the default) from older ones
+    kdf_version: int = Field(default=1, ge=1, le=2)
 
 
 class EscrowRequest(BaseModel):
@@ -271,6 +300,8 @@ class EscrowRequest(BaseModel):
 class PasskeyLoginBegin(BaseModel):
     username: str = Field(max_length=64)
     password: str = Field(max_length=PASSWORD_MAX_LENGTH)
+    # A version 2 client sends its version 1 login key too, for accounts not yet moved over (kdf.py)
+    legacy_password: Optional[str] = Field(default=None, max_length=PASSWORD_MAX_LENGTH)
 
 
 class PasskeyOptions(BaseModel):

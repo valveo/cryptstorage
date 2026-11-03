@@ -106,7 +106,7 @@ func TestWaitsForTheEmailAndCanBeResumed(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"access_token": "a", "refresh_token": "r"})
 	}))
 	defer srv.Close()
-	keys, _ := e2ee.Derive("alice", "correct horse battery")
+	keys, _ := e2ee.DeriveSet("", "alice", "correct horse battery")
 	api := apiclient.New(srv.URL, "", "")
 
 	u := &scripted{t: t, answers: []string{"yes", "yes", "yes"}}

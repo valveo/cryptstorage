@@ -18,8 +18,17 @@ var ErrNoPasskey = errors.New("no passkey for this account")
 
 // PasskeyBegin checks the password again and starts a passkey sign-in.
 func (c *Client) PasskeyBegin(username, password string) (*PasskeyStart, error) {
+	return c.PasskeyBeginKeys(username, password, "")
+}
+
+// PasskeyBeginKeys is PasskeyBegin with the version 1 login key next to the current one (see LoginKeys).
+func (c *Client) PasskeyBeginKeys(username, password, legacyKey string) (*PasskeyStart, error) {
 	var r PasskeyStart
-	err := c.post("/auth/passkey/begin", map[string]string{"username": username, "password": password}, &r)
+	body := map[string]string{"username": username, "password": password}
+	if legacyKey != "" {
+		body["legacy_password"] = legacyKey
+	}
+	err := c.post("/auth/passkey/begin", body, &r)
 	var apiErr *APIError
 	if errors.As(err, &apiErr) && (apiErr.Status == 404 || apiErr.Status == 503) {
 		return nil, ErrNoPasskey

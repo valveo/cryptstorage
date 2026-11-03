@@ -230,7 +230,35 @@ def test_registration_sends_no_ssh_key_and_shows_no_recovery_code(web):
         "mode": "register", "username": "alice", "email": "a@example.com", "password": KEY, "csrf_token": token})
     assert status == 200 and "cryptclient setup" in html and 'id="recovery-code"' not in html
     assert json.loads(web.api.last("POST", "/auth/register")["body"]) == {
-        "username": "alice", "email": "a@example.com", "password": KEY}
+        "username": "alice", "email": "a@example.com", "password": KEY, "kdf_version": 1}
+    token = web.csrf()
+    web.request("POST", "/index.php", {"mode": "register", "username": "alice", "email": "a@example.com",
+                                       "password": KEY, "kdf_version": "2", "csrf_token": token})
+    assert json.loads(web.api.last("POST", "/auth/register")["body"])["kdf_version"] == 2
+
+
+def test_sign_in_form_carries_the_servers_kdf_salt_and_sends_the_legacy_key(web):
+    salt = "0f" * 32
+    web.api.routes[("GET", "/server-info")] = (200, {"storage_mode": "e2ee", "kdf_version": 2, "kdf_salt": salt})
+    _, _, html = web.request("GET", "/index.php")
+    assert f'data-kdf-salt="{salt}"' in html and 'name="legacy_password"' in html
+    token = web.csrf()
+    legacy = "cd" * 32
+    status, _, _ = web.request("POST", "/index.php", {
+        "mode": "login", "username": "alice", "password": KEY, "legacy_password": legacy, "csrf_token": token})
+    body = json.loads(web.api.last("POST", "/auth/login")["body"])
+    assert status == 302 and body["password"] == KEY and body["legacy_password"] == legacy
+    # anything but a derived key is dropped, never forwarded
+    web.cookie = None                                       # signed out: a new browser session
+    token = web.csrf()
+    web.request("POST", "/index.php", {"mode": "login", "username": "alice", "password": KEY,
+                                       "legacy_password": "my real password", "csrf_token": token})
+    assert "legacy_password" not in json.loads(web.api.last("POST", "/auth/login")["body"])
+
+
+def test_sign_in_form_without_a_salt_from_the_api(web):
+    _, _, html = web.request("GET", "/index.php")          # the stub has no /server-info: version 1
+    assert 'data-kdf-salt=""' in html
 
 
 def test_recovery_page_only_explains_the_app_route(web):

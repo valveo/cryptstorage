@@ -95,10 +95,13 @@ def test_delete_removes_sftp_account(e2):
 
 def test_server_info_and_escrow_policy(e2, monkeypatch):
     monkeypatch.delenv("TOTP_ENCRYPTION_KEY", raising=False)
-    assert e2.get("/server-info").json() == {"storage_mode": "e2ee", "version": main.version.VERSION,
-                                             "recovery_policy": "user",
-                                             "escrow_public_key": None, "escrow_key_fingerprint": None,
-                                             "account_lifetime_hours": None, "server_id": None}
+    info = e2.get("/server-info").json()
+    salt = info.pop("kdf_salt")
+    assert len(salt) == 64 and bytes.fromhex(salt)
+    assert info == {"storage_mode": "e2ee", "version": main.version.VERSION,
+                    "recovery_policy": "user",
+                    "escrow_public_key": None, "escrow_key_fingerprint": None,
+                    "account_lifetime_hours": None, "server_id": None, "kdf_version": 2}
     make_user(e2, "liam")
     h = bearer(e2, "liam")
     blob = "ab" * 92

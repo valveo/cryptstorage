@@ -133,10 +133,19 @@ var ErrSecondFactorSetup = errors.New("this server requires two-factor authentic
 	"web page, turn it on under \"Two-factor authentication\", then run this again")
 
 func (c *Client) Login(username, password, totpCode string) (*LoginResponse, error) {
+	return c.LoginKeys(username, password, "", totpCode)
+}
+
+// LoginKeys logs in with the current login key and, while the account may still be on key derivation
+// version 1, that version's key as legacyKey (e2ee.KeySet). The server checks the one the account uses.
+func (c *Client) LoginKeys(username, password, legacyKey, totpCode string) (*LoginResponse, error) {
 	var resp LoginResponse
 	body := map[string]string{
 		"username": username,
 		"password": password,
+	}
+	if legacyKey != "" {
+		body["legacy_password"] = legacyKey
 	}
 	if totpCode != "" {
 		body["totp_code"] = totpCode

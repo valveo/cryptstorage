@@ -19,6 +19,10 @@ type ServerInfo struct {
 	// ServerID tells servers apart; it lasts as long as the server's stick secrets. Empty from servers
 	// without stick secrets, and from older ones.
 	ServerID string `json:"server_id"`
+	// KdfSalt is the server's part of the password salt (64 hex, key derivation version 2, e2ee.DeriveSet);
+	// empty from older servers, which then get version 1 keys.
+	KdfSalt    string `json:"kdf_salt"`
+	KdfVersion int    `json:"kdf_version"`
 }
 
 // E2EEStorage from GET /storage/e2ee: where to connect for the ciphertext.
@@ -41,12 +45,40 @@ func (c *Client) ServerInfo() (*ServerInfo, error) {
 	return &r, nil
 }
 
-// Register creates the account. loginKey is e2ee.Keys.AuthKey.
+// Register creates the account. loginKey is e2ee.Keys.AuthKey, made with key derivation version 1.
 func (c *Client) Register(username, email, loginKey string) error {
+	return c.RegisterVersion(username, email, loginKey, 1)
+}
+
+// RegisterVersion creates the account with a login key made with the given key derivation version.
+func (c *Client) RegisterVersion(username, email, loginKey string, kdfVersion int) error {
 	var r map[string]interface{}
-	return c.post("/auth/register", map[string]string{
-		"username": username, "email": email, "password": loginKey,
+	return c.post("/auth/register", map[string]interface{}{
+		"username": username, "email": email, "password": loginKey, "kdf_version": kdfVersion,
 	}, &r)
+}
+
+// KdfVersion is the key derivation version of the signed-in account's login key (1 from older servers).
+func (c *Client) KdfVersion() (int, error) {
+	var r struct {
+		KdfVersion int `json:"kdf_version"`
+	}
+	if err := c.get("/users/me", &r); err != nil {
+		return 0, err
+	}
+	if r.KdfVersion == 0 {
+		return 1, nil
+	}
+	return r.KdfVersion, nil
+}
+
+// UpgradeKdf replaces the version 1 login key with the same password's current one. The sessions stay.
+// Like a password change it wants a recent second factor: ErrTOTPRequired otherwise.
+func (c *Client) UpgradeKdf(oldKey, newKey, totpCode string) error {
+	var r map[string]string
+	return totpErr(c.post("/users/me/kdf-upgrade", withCode(map[string]string{
+		"current_password": oldKey, "new_password": newKey,
+	}, totpCode), &r))
 }
 
 // KeyPendingError means the server accepted a new SSH key but, as a safety measure, activates
@@ -128,19 +160,38 @@ func (c *Client) PutEscrow(blobHex string) error {
 // RecoverE2EE resets the login key with the recovery proof. No login needed. An account with
 // two-factor also needs a code (or backup code): without one it returns ErrTOTPRequired.
 func (c *Client) RecoverE2EE(username, proof, newLoginKey, totpCode string) error {
-	var r map[string]string
-	return totpErr(c.post("/auth/recover-e2ee", withCode(map[string]string{
+	return c.RecoverE2EEVersion(username, proof, newLoginKey, totpCode, 1)
+}
+
+// RecoverE2EEVersion is RecoverE2EE with a new login key of the given key derivation version.
+func (c *Client) RecoverE2EEVersion(username, proof, newLoginKey, totpCode string, kdfVersion int) error {
+	var r map[string]interface{}
+	return totpErr(c.post("/auth/recover-e2ee", withVersion(withCode(map[string]string{
 		"username": username, "proof": proof, "new_password": newLoginKey,
-	}, totpCode), &r))
+	}, totpCode), kdfVersion), &r))
 }
 
 // ChangeLoginKey replaces the login key (password change). All sessions end. A login that passed
 // two-factor a few minutes ago is enough; otherwise it returns ErrTOTPRequired and wants a code.
 func (c *Client) ChangeLoginKey(oldKey, newKey, totpCode string) error {
-	var r map[string]string
-	return totpErr(c.post("/users/me/password", withCode(map[string]string{
+	return c.ChangeLoginKeyVersion(oldKey, newKey, totpCode, 1)
+}
+
+// ChangeLoginKeyVersion is ChangeLoginKey with a new login key of the given key derivation version.
+func (c *Client) ChangeLoginKeyVersion(oldKey, newKey, totpCode string, kdfVersion int) error {
+	var r map[string]interface{}
+	return totpErr(c.post("/users/me/password", withVersion(withCode(map[string]string{
 		"current_password": oldKey, "new_password": newKey,
-	}, totpCode), &r))
+	}, totpCode), kdfVersion), &r))
+}
+
+func withVersion(body map[string]string, kdfVersion int) map[string]interface{} {
+	out := make(map[string]interface{}, len(body)+1)
+	for k, v := range body {
+		out[k] = v
+	}
+	out["kdf_version"] = kdfVersion
+	return out
 }
 
 func withCode(body map[string]string, totpCode string) map[string]string {
