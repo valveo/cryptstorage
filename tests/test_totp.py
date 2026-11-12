@@ -71,8 +71,13 @@ def test_login_requires_code_once_enabled(tc):
     secret, backups = _enrol(tc, "alice")
     r = login(tc, "alice")
     assert r.status_code == 401 and r.json()["detail"] == "TOTP_REQUIRED"
+    # marked as a step of the sign-in, so fail2ban does not count it (tests/test_fail2ban_filter.py)
+    assert r.headers.get("X-Auth-Step") == "second-factor"
     r = tc.post("/auth/login", json={"username": "alice", "password": PASSWORD, "totp_code": "000000"})
     assert r.status_code == 401 and "access_token" not in r.text
+    assert "X-Auth-Step" not in r.headers        # a wrong code is a failure
+    r = tc.post("/auth/login", json={"username": "alice", "password": "wrong " + PASSWORD})
+    assert r.status_code == 401 and "X-Auth-Step" not in r.headers
     # the code used for enabling is spent; the next step is accepted
     step = totp.current_step() + 1
     with database.SessionLocal() as db:

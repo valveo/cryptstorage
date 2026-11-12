@@ -269,13 +269,21 @@ def _accept_second_factor(db: Session, user: User, code: str) -> bool:
     return False
 
 
+# Marks a 401 that is a step of a sign-in, not a failure (see _check_second_factor)
+AUTH_STEP_HEADER = "X-Auth-Step"
+
+
 def _check_second_factor(request: Request, db: Session, user: User, code: Optional[str]) -> None:
     """Login step after the password: nothing if the account has no second factor."""
     if not user.totp_enabled:
         return
     if not code:
         # Reached only with the right password, so this does not reveal accounts to guessers.
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="TOTP_REQUIRED")
+        # Every ordinary sign-in passes through here once (the app asks for the code only after this
+        # answer). The header lets nginx write it into its log, so fail2ban does not count it as a
+        # failed login (ansible/roles/fail2ban): a whole office behind one address would get banned.
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="TOTP_REQUIRED",
+                            headers={AUTH_STEP_HEADER: "second-factor"})
     ip = get_client_ip(request)
     retry = _totp_failures.blocked(user.id)
     if retry:
