@@ -242,6 +242,10 @@ jobs:
         run: '[ "$RUNNER_ENVIRONMENT" = github-hosted ]'
       - name: The name of the server points here
         run: echo "127.0.0.1 $DOMAIN" | sudo tee -a /etc/hosts
+      # The runner image is not a fresh server: its firefox package is a shim that fetches a snap when
+      # upgraded, which fails there and with it the playbook's system upgrade. A server has no such package.
+      - name: Remove what a server would not have
+        run: sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 remove -y -qq firefox
       - name: Preflight only
         run: sudo ./install.sh --check
       - name: Install
