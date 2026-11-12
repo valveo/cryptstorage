@@ -4,7 +4,9 @@ from sqlalchemy import create_engine, inspect, text
 
 import database
 import migrate
-import models  # noqa: F401  (registers the tables)
+import models
+
+assert models.SchemaVersion      # importing it registers the tables
 
 
 def _engine(tmp_path, name="m.db"):
