@@ -101,7 +101,8 @@ def test_server_info_and_escrow_policy(e2, monkeypatch):
     assert info == {"storage_mode": "e2ee", "version": main.version.VERSION,
                     "recovery_policy": "user",
                     "escrow_public_key": None, "escrow_key_fingerprint": None,
-                    "account_lifetime_hours": None, "server_id": None, "kdf_version": 2}
+                    "account_lifetime_hours": None, "server_id": None, "kdf_version": 2,
+                    "registration": "open", "min_client_version": None}
     make_user(e2, "liam")
     h = bearer(e2, "liam")
     blob = "ab" * 92

@@ -118,6 +118,26 @@ function kdf_salt(): string {
     return $_SESSION['kdf_salt'];
 }
 
+// Who may register here: 'open', 'invite' (an invitation code is asked for) or 'closed' (api/config.py).
+// An older API does not say, and is open.
+function registration_mode(): string {
+    require_once __DIR__ . '/api.php';
+    static $mode = null;
+    if ($mode === null) {
+        $m = (new ApiClient())->server_info()['registration'] ?? 'open';
+        $mode = in_array($m, ['open', 'invite', 'closed'], true) ? $m : 'open';
+    }
+    return $mode;
+}
+
+// The API's reasons for refusing a registration, in words
+const REGISTRATION_ERRORS = [
+    'REGISTRATION_CLOSED'  => 'This server does not take new accounts. Ask its administrator.',
+    'INVITE_REQUIRED'      => 'This server takes new accounts by invitation only. Enter your invitation code.',
+    'INVITE_INVALID'       => 'The invitation code is not valid: it is wrong, used, expired, or meant for another e-mail address.',
+    'EMAIL_DOMAIN_REFUSED' => 'This server does not take accounts with that e-mail address.',
+];
+
 const LOGIN_KEY_ERROR = 'Your browser could not prepare the password securely. Allow scripts for this page, or use a current browser.';
 
 // Loads the derivation script (after the page's own scripts, so a cancelled confirm() is seen first).

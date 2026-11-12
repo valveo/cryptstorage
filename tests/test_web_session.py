@@ -76,10 +76,44 @@ def test_unknown_names_get_options_too(pk):
     make_user(pk, "web_nopk")
     for name in ("web_nopk", "nobody_here"):
         r = pk.post("/auth/web/passkey/begin", json={"username": name})
-        assert r.status_code == 200 and len(r.json()["options"]["allowCredentials"]) == 1
+        assert r.status_code == 200 and len(r.json()["options"]["allowCredentials"]) in (1, 2)
         r = pk.post("/auth/web/passkey/finish", json={"session": r.json()["session"],
                                                        "credential": tp.Authenticator().get(r.json()["options"])})
         assert r.status_code == 401
+
+
+def test_names_without_passkeys_look_like_accounts_with_one(pk, monkeypatch):
+    """Asking twice gives the same passkey ids (random ones gave an unknown name away), a different
+    name gives other ids, and wrong answers are slowed down exactly as for a real account."""
+    import main
+    from throttle import FailureTracker
+    monkeypatch.setattr(main, "_web_passkey_failures", FailureTracker(5, 900))
+    _account_with_passkey(pk, "web_real")
+    make_user(pk, "web_plain")
+
+    def ids(name):
+        r = pk.post("/auth/web/passkey/begin", json={"username": name})
+        assert r.status_code == 200
+        return [c["id"] for c in r.json()["options"]["allowCredentials"]]
+
+    for name in ("web_real", "web_plain", "nobody_at_all"):
+        first = ids(name)
+        assert first == ids(name) and 1 <= len(first) <= 2
+        assert all(len(tp.unb64u(i)) >= 16 for i in first)
+    assert ids("nobody_at_all") == ids(" Nobody_At_All") != ids("nobody_at_al")
+
+    def failures_until_429(name):
+        n = 0
+        while True:
+            r = pk.post("/auth/web/passkey/begin", json={"username": name})
+            r = pk.post("/auth/web/passkey/finish", json={
+                "session": r.json()["session"], "credential": tp.Authenticator().get(r.json()["options"])})
+            if r.status_code == 429:
+                return n
+            assert r.status_code == 401 and r.json()["detail"] == "This passkey is not registered for this account."
+            n += 1
+
+    assert failures_until_429("web_real") == failures_until_429("web_plain") == failures_until_429("nobody_at_all") == 5
 
 
 def test_the_second_factor_session_of_the_app_is_not_a_web_session(pk):

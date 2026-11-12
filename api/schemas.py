@@ -47,6 +47,8 @@ class RegisterRequest(BaseModel):
     # Which key derivation the login key comes from (api/kdf.py): 2 from clients that know the
     # server's kdf_salt, 1 (the default) from older ones
     kdf_version: int = Field(default=1, ge=1, le=2)
+    # The invitation code, on a server that registers by invitation (REGISTRATION=invite)
+    invite: Optional[str] = Field(default=None, max_length=128)
 
     @field_validator("username")
     @classmethod
@@ -233,6 +235,10 @@ class ServerInfo(BaseModel):
     # api/kdf.py). Older servers send neither, and the client then uses version 1.
     kdf_version: int = 1
     kdf_salt: Optional[str] = None
+    # Who may register: "open", "invite" (an invitation code is needed) or "closed"
+    registration: str = "open"
+    # The oldest client the administrator accepts ("0.1.2"); None: any
+    min_client_version: Optional[str] = None
 
 
 class E2EEStorageResponse(BaseModel):

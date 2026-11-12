@@ -2,6 +2,8 @@ module cryptclient
 
 go 1.26.0
 
+toolchain go1.26.11
+
 require (
 	github.com/godbus/dbus/v5 v5.2.4
 	golang.org/x/crypto v0.57.0

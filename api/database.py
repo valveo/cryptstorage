@@ -44,7 +44,14 @@ def get_db():
 
 
 def init_db():
-    """Create all tables if they don't exist."""
+    """Create the tables that are missing, then apply the schema changes an existing database
+    still lacks (migrate.py). Raises migrate.MigrationError if the database cannot be used."""
+    import migrate
     import models  # registers the models with Base.metadata
     _ = models.User
+    existing = migrate.had_data(engine)
     Base.metadata.create_all(bind=engine)
+    applied = migrate.run(engine, existing)
+    if applied:
+        import logging
+        logging.getLogger(__name__).info(f"Database migrations applied: {applied}")

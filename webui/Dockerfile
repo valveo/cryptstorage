@@ -1,4 +1,5 @@
-FROM php:8.3-apache
+# By digest: a tag can be moved to other content, a digest cannot (Dependabot proposes new ones)
+FROM php:8.3-apache@sha256:a800bbd2c0aa322702259ed475556b2cbc311076a8d3c4bba9bfe96838745472
 
 # Enable HTTPS rewrite
 RUN a2enmod rewrite ssl

@@ -31,12 +31,19 @@ func gocryptfsBin() (string, error) {
 }
 
 // MountVolume mounts the ciphertext directory at plainDir. The passphrase goes to gocryptfs
-// through its standard input, never through a file or the command line.
+// through its standard input, never through a file or the command line. The volume's config comes
+// from the server, so it is checked and the mount uses a local copy of what was checked (LocalConf).
 func MountVolume(cipherDir, plainDir string, passphrase []byte) error {
-	if runtime.GOOS == "windows" {
-		return cppMount(cipherDir, plainDir, string(passphrase), "", false)
+	confPath, dir, err := LocalConf(cipherDir)
+	if err != nil {
+		return err
 	}
-	return runMount([]string{"-q", "-nosyslog", "-noprealloc", cipherDir, plainDir}, append(append([]byte{}, passphrase...), '\n'))
+	defer os.RemoveAll(dir)
+	if runtime.GOOS == "windows" {
+		return cppMount(cipherDir, plainDir, string(passphrase), confPath, false)
+	}
+	return runMount([]string{"-q", "-nosyslog", "-noprealloc", "-config", confPath, cipherDir, plainDir},
+		append(append([]byte{}, passphrase...), '\n'))
 }
 
 // MountVolumeWithMasterKey is for recovery. readOnly should be true for the check before any change.

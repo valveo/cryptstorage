@@ -322,7 +322,10 @@ its own and is not needed for G1.
 
 **A forged volume.** A server cannot replace `gocryptfs.conf` with one of its own without the user's
 passphrase failing to unlock it; the client reports a wrong passphrase and writes nothing. A *stale*
-config (from before a passphrase change) behaves the same way.
+config (from before a passphrase change) behaves the same way. The settings next to the wrapped key (the
+feature flags) are not authenticated by gocryptfs, so the client checks that they are exactly the ones it
+writes and mounts with a local copy of the checked config (`e2ee.LocalConf`); a server that adds
+`PlaintextNames` is refused.
 
 ## 11. Test plan
 

@@ -42,6 +42,20 @@
     group: root
     mode: '0750'
 
+# ansible/README.md "Administration": sudo cryptstorage-admin users
+- name: Install the administration command
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/cryptstorage-admin
+    owner: root
+    group: root
+    mode: '0750'
+    content: |
+      #!/bin/sh
+      # Runs api/admin.py inside the API container (accounts, quotas, invitations).
+      cd "{{ install_dir }}" || exit 1
+      t=""; [ -t 0 ] || t="-T"
+      exec docker compose exec $t api python admin.py "$@"
+
 - name: Deploy docker-compose.yml from template
   ansible.builtin.template:
     src: docker-compose.yml.j2
@@ -49,12 +63,6 @@
     owner: root
     group: root
     mode: '0640'
-
-- name: Pull MariaDB image
-  community.docker.docker_image:
-    name: mariadb
-    tag: "11"
-    source: pull
 
 - name: Start Docker Compose stack
   community.docker.docker_compose_v2:

@@ -59,6 +59,9 @@ def _run(action: str, user_id: str, command: dict) -> dict:
     if action == "e2ee_delete":
         sftpgo_client.delete(user_id)
         return {"status": "ok"}
+    if action == "e2ee_set_enabled":
+        sftpgo_client.set_enabled(user_id, command["enabled"])
+        return {"status": "ok"}
     if action == "e2ee_usage":
         used = sftpgo_client.usage_bytes(user_id)
         quota = command["quota_bytes"]

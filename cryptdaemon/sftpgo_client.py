@@ -111,9 +111,9 @@ def _call(method: str, path: str, body: dict | None = None, ok_missing: bool = F
     raise ProvisionError("SFTPGo refused the token")
 
 
-def _user_doc(acct: str, ssh_public_key: str | None, quota_bytes: int) -> dict:
+def _user_doc(acct: str, ssh_public_key: str | None, quota_bytes: int, status: int = 1) -> dict:
     return {
-        "status": 1, "username": acct, "home_dir": _home(acct), "uid": DATA_UID, "gid": DATA_GID,
+        "status": status, "username": acct, "home_dir": _home(acct), "uid": DATA_UID, "gid": DATA_GID,
         "public_keys": [ssh_public_key] if ssh_public_key else [],
         "permissions": {"/": ["*"]},
         "quota_size": quota_bytes, "quota_files": 0,
@@ -138,7 +138,8 @@ def provision(user_id: str, ssh_public_key: str | None, quota_bytes: int | None 
     acct = account_name(user_id)
     quota = quota_bytes if quota_bytes else DEFAULT_QUOTA     # 0 would mean "tracked but unlimited"
     existing = _call("GET", f"/users/{acct}", ok_missing=True)
-    doc = _user_doc(acct, ssh_public_key, quota)
+    # An account the administrator locked (set_enabled) stays locked whatever else changes
+    doc = _user_doc(acct, ssh_public_key, quota, _status(existing))
     if existing is None:
         _make_dirs(acct)
         _call("POST", "/users", doc)
@@ -156,7 +157,26 @@ def set_key(user_id: str, ssh_public_key: str) -> None:
     user = _call("GET", f"/users/{acct}", ok_missing=True)
     if user is None:
         raise ProvisionError("storage does not exist")
-    _call("PUT", f"/users/{acct}", _user_doc(acct, ssh_public_key, user.get("quota_size") or DEFAULT_QUOTA))
+    _call("PUT", f"/users/{acct}",
+          _user_doc(acct, ssh_public_key, user.get("quota_size") or DEFAULT_QUOTA, _status(user)))
+
+
+def _status(existing: dict | None) -> int:
+    return 0 if existing is not None and existing.get("status") == 0 else 1
+
+
+def set_enabled(user_id: str, enabled: bool) -> None:
+    """Lock or unlock the SFTP account. Locking also ends its open connections (disconnect=1), so a
+    mounted volume stops working at once. Nothing to do when the storage was never created."""
+    acct = account_name(user_id)
+    user = _call("GET", f"/users/{acct}", ok_missing=True)
+    if user is None:
+        return
+    keys = user.get("public_keys") or []
+    doc = _user_doc(acct, None, user.get("quota_size") or DEFAULT_QUOTA, 1 if enabled else 0)
+    doc["public_keys"] = keys
+    _call("PUT", f"/users/{acct}" + ("" if enabled else "?disconnect=1"), doc)
+    logger.info(f"SFTP user {acct} {'unlocked' if enabled else 'locked'}.")
 
 
 def delete(user_id: str) -> None:

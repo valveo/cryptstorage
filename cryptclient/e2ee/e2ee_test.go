@@ -3,6 +3,8 @@ package e2ee
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,6 +48,59 @@ func TestHostileConfigIsRefused(t *testing.T) {
 	bad := `{"EncryptedKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","ScryptObject":{"Salt":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","N":1073741824,"R":8,"P":1,"KeyLen":32},"Version":2}`
 	if _, err := ReadMasterKey([]byte(bad), []byte("x")); err == nil || strings.Contains(err.Error(), "authentication") {
 		t.Fatalf("expected a parameter error, got %v", err)
+	}
+}
+
+// The feature flags are not covered by the wrapped key's authentication, so a server could switch
+// file-name encryption off. Anything but our own flags is refused, and the copy the mount uses holds
+// only the fields we know.
+func TestTamperedFeatureFlagsAreRefused(t *testing.T) {
+	mk, _ := NewMasterKey()
+	conf, err := MakeConf(mk, []byte("pw"), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flags := range [][]string{
+		{"HKDF", "GCMIV128", "PlaintextNames"},
+		{"HKDF", "GCMIV128", "EMENames", "LongNames", "Raw64"},                    // no DirIV
+		{"HKDF", "GCMIV128", "DirIV", "EMENames", "LongNames", "Raw64", "AESSIV"}, // another cipher
+		{"HKDF", "GCMIV128", "DirIV", "EMENames", "LongNames", "LongNames"},
+		nil,
+	} {
+		var doc map[string]any
+		json.Unmarshal(conf, &doc)
+		doc["FeatureFlags"] = flags
+		bad, _ := json.Marshal(doc)
+		if _, err := ReadMasterKey(bad, []byte("pw")); !errors.Is(err, ErrUnsafeConf) {
+			t.Errorf("flags %v: want ErrUnsafeConf, got %v", flags, err)
+		}
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "gocryptfs.conf"), bad, 0o600)
+		if _, _, err := LocalConf(dir); !errors.Is(err, ErrUnsafeConf) {
+			t.Errorf("flags %v: LocalConf: want ErrUnsafeConf, got %v", flags, err)
+		}
+	}
+
+	// the same flags in another order are fine, and an unknown field does not reach the local copy
+	var doc map[string]any
+	json.Unmarshal(conf, &doc)
+	doc["FeatureFlags"] = []string{"Raw64", "LongNames", "EMENames", "DirIV", "GCMIV128", "HKDF"}
+	doc["LongNameMax"] = 62
+	doc["FIDO2"] = map[string]any{"CredentialID": "AAAA"}
+	odd, _ := json.Marshal(doc)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "gocryptfs.conf"), odd, 0o600)
+	p, tmp, err := LocalConf(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmp)
+	local, _ := os.ReadFile(p)
+	if bytes.Contains(local, []byte("LongNameMax")) || bytes.Contains(local, []byte("FIDO2")) {
+		t.Errorf("unknown fields reached the local copy: %s", local)
+	}
+	if got, err := ReadMasterKey(local, []byte("pw")); err != nil || !bytes.Equal(got, mk) {
+		t.Errorf("the local copy does not open: %v", err)
 	}
 }
 
@@ -163,5 +218,49 @@ func TestDeriveSet(t *testing.T) {
 		if _, err := DeriveSet(bad, "alice", "x"); err == nil {
 			t.Fatalf("malformed salt %q accepted", bad)
 		}
+	}
+}
+
+// With the real gocryptfs: a normal mount stores encrypted names, and a config whose flags the server
+// changed to PlaintextNames is refused before gocryptfs sees it.
+func TestMountUsesCheckedConfig(t *testing.T) {
+	if _, err := exec.LookPath("gocryptfs"); err != nil {
+		t.Skip("gocryptfs is not installed")
+	}
+	if _, err := os.Stat("/dev/fuse"); err != nil {
+		t.Skip("no FUSE here")
+	}
+	cipher, plain := t.TempDir(), t.TempDir()
+	mk, _ := NewMasterKey()
+	pass := []byte("0123456789abcdef0123456789abcdef")
+	conf, err := MakeConf(mk, pass, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteVolumeFiles(cipher, conf, bytes.Repeat([]byte{7}, 16)); err != nil {
+		t.Fatal(err)
+	}
+	if err := MountVolume(cipher, plain, pass); err != nil {
+		t.Skipf("cannot mount here: %v", err)
+	}
+	werr := os.WriteFile(filepath.Join(plain, "secret-name.txt"), []byte("x"), 0o600)
+	if err := UnmountVolume(plain); err != nil {
+		t.Fatal(err)
+	}
+	if werr != nil {
+		t.Fatal(werr)
+	}
+	if _, err := os.Stat(filepath.Join(cipher, "secret-name.txt")); err == nil {
+		t.Fatal("the file name is stored in the clear")
+	}
+
+	var doc map[string]any
+	json.Unmarshal(conf, &doc)
+	doc["FeatureFlags"] = []string{"HKDF", "GCMIV128", "PlaintextNames"}
+	bad, _ := json.Marshal(doc)
+	os.WriteFile(filepath.Join(cipher, "gocryptfs.conf"), bad, 0o600)
+	if err := MountVolume(cipher, plain, pass); !errors.Is(err, ErrUnsafeConf) {
+		UnmountVolume(plain)
+		t.Fatalf("a config with PlaintextNames: want ErrUnsafeConf, got %v", err)
 	}
 }

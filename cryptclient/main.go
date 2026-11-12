@@ -28,6 +28,7 @@ var Version = "dev"
 const defaultServer = "https://your-server.example.com"
 
 func main() {
+	apiclient.ClientVersion = Version
 	loadEnvFile(envFilePath())
 	if len(os.Args) < 2 && runtime.GOOS == "windows" && !hasConsole() {
 		cmdTray() // CryptStorage.exe: the window program started from the Start menu or at sign-in

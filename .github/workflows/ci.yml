@@ -38,7 +38,7 @@ jobs:
       sftpgo: ${{ steps.f.outputs.sftpgo }}
       e2ee: ${{ steps.f.outputs.e2ee }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - id: f
@@ -70,11 +70,21 @@ jobs:
     if: ${{ needs.changes.outputs.python == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
+      # The API's dependencies exactly as the image installs them: every package, also the indirect
+      # ones, at a fixed version and checked against its hash (api/requirements.lock)
+      - run: pip install --require-hashes -r api/requirements.lock
       - run: pip install -r requirements-dev.txt
+      - name: The lock file matches requirements.txt
+        run: |
+          pip install uv==0.13.7
+          cd api && uv pip compile requirements.txt --universal --python-version 3.11 --generate-hashes \
+            --no-header --no-annotate -q -o requirements.lock
+          git diff --exit-code -- requirements.lock || {
+            echo "::error::api/requirements.lock is out of date: run the command in api/requirements.txt and commit the result"; exit 1; }
       - name: SFTPGo (pinned release; the daemon's client is tested against the real server)
         # already there on the self-hosted runner (it is the test server's version): no sudo needed then
         run: sftpgo --version 2>/dev/null | grep -qi "^sftpgo 2.7.6" || sudo scripts/install_sftpgo.sh
@@ -82,8 +92,8 @@ jobs:
         run: python -m pyflakes api cryptdaemon tests
       - name: Tests (unit, API <-> daemon smoke test, web UI against a stub API)
         run: python -m pytest -q
-      - name: Known vulnerabilities in pinned dependencies
-        run: pip install pip-audit && pip-audit -r api/requirements.txt --no-deps --disable-pip
+      - name: Known vulnerabilities in the dependencies, the indirect ones included
+        run: pip install pip-audit && pip-audit -r api/requirements.lock --require-hashes --disable-pip
 
   go:
     needs: changes
@@ -93,8 +103,8 @@ jobs:
       run:
         working-directory: cryptclient
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: cryptclient/go.mod
       # go.sum is committed: fail when go.mod or go.sum would change, instead of fixing them silently
@@ -106,10 +116,11 @@ jobs:
           for os in linux windows darwin; do
             GOOS=$os CGO_ENABLED=0 go build -o /dev/null .
           done
-      # Report-only for now: findings in the Go toolchain itself would otherwise block unrelated changes
+      # Fails the build: it reports only vulnerabilities in code the client actually calls. One in the Go
+      # standard library is fixed by raising the "toolchain" line in go.mod, which is also the Go the
+      # releases are built with.
       - name: Known vulnerabilities (govulncheck)
-        continue-on-error: true
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   secrets:
     # Secret scan of the tree and the history of this commit (gitleaks, pinned release; fixtures in .gitleaks.toml).
@@ -120,7 +131,7 @@ jobs:
     # A scan takes seconds; a stuck one held the test server for minutes (2026-10-29)
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: gitleaks
@@ -140,15 +151,15 @@ jobs:
     if: ${{ needs.changes.outputs.passkeys == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: scripts/ci_sudo.sh
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: cryptclient/go.mod
       - run: pip install -r requirements-dev.txt
@@ -167,9 +178,9 @@ jobs:
     if: ${{ needs.changes.outputs.sftpgo == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: scripts/ci_sudo.sh
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt ansible-core
@@ -191,15 +202,15 @@ jobs:
     if: ${{ needs.changes.outputs.e2ee == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: scripts/ci_sudo.sh
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: cryptclient/go.mod
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
       - run: sudo apt-get -o DPkg::Lock::Timeout=600 update && sudo apt-get -o DPkg::Lock::Timeout=600 install -y gocryptfs sshfs fuse3

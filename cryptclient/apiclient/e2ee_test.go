@@ -97,3 +97,43 @@ func TestSyncLockConflictAndRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestVersionOlder(t *testing.T) {
+	for _, c := range []struct {
+		have, want string
+		older      bool
+	}{
+		{"0.1.1", "0.1.2", true}, {"v0.1.1", "0.1.2", true}, {"0.1.2", "0.1.2", false}, {"0.2.0", "0.1.9", false},
+		{"0.9.0", "0.10.0", true}, {"1.0.0", "0.10.0", false},
+		// not a plain release version: never locked out
+		{"dev", "0.1.2", false}, {"dev+9151441 (2026-10-29)", "0.1.2", false}, {"0.1.1", "", false}, {"0.1.1", "soon", false},
+	} {
+		if got := VersionOlder(c.have, c.want); got != c.older {
+			t.Errorf("VersionOlder(%q, %q) = %v", c.have, c.want, got)
+		}
+	}
+}
+
+func TestServerInfoRefusesAnOldClient(t *testing.T) {
+	old := ClientVersion
+	t.Cleanup(func() { ClientVersion = old })
+	c := stubAPI(t, 200, `{"storage_mode":"e2ee","min_client_version":"0.1.2","registration":"invite"}`)
+
+	ClientVersion = "0.1.1"
+	if _, err := c.ServerInfo(); !errors.Is(err, ErrClientTooOld) || !strings.Contains(err.Error(), "0.1.2") {
+		t.Fatalf("an older client must be told to update, got %v", err)
+	}
+	ClientVersion = "0.1.2"
+	info, err := c.ServerInfo()
+	if err != nil || info.Registration != "invite" {
+		t.Fatalf("the required version itself must pass: %v %+v", err, info)
+	}
+}
+
+func TestRegisterSaysWhyItWasRefused(t *testing.T) {
+	c := stubAPI(t, 403, `{"detail":"INVITE_INVALID"}`)
+	err := c.RegisterInvited("alice", "a@example.org", "key", 2, "code")
+	if err == nil || !strings.Contains(err.Error(), "invitation code is not valid") {
+		t.Fatalf("got %v", err)
+	}
+}

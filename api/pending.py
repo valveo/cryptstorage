@@ -27,7 +27,7 @@ import config
 from audit import log as audit_log
 from auth import _hash_token
 from email_verification import BASE_URL, send_security_notice_email
-from models import EscrowSeal, PendingChange, StickLock, StickSecret, SyncLock, User, UserKdf, WebAuthnCredential
+from models import Invite, EscrowSeal, PendingChange, StickLock, StickSecret, SyncLock, User, UserKdf, WebAuthnCredential
 from socket_client import DaemonError, daemon_e2ee_delete, daemon_e2ee_provision
 
 logger = logging.getLogger(__name__)
@@ -222,6 +222,34 @@ def expire_accounts(db: Session) -> int:
     return n
 
 
+def remove_unused_account(db: Session, user: User) -> None:
+    """Remove an account that never had storage: a registration that could not be completed. The
+    invitation it used, if any, works again."""
+    db.query(Invite).filter(Invite.used_by == user.id).update(
+        {Invite.used_at: None, Invite.used_by: None}, synchronize_session=False)
+    db.query(UserKdf).filter(UserKdf.user_id == user.id).delete(synchronize_session=False)
+    db.delete(user)
+    db.commit()
+
+
+def remove_unverified(db: Session) -> int:
+    """Remove accounts whose e-mail address was never confirmed (UNVERIFIED_ACCOUNT_HOURS). The link in
+    the e-mail has stopped working by then, and such an account would hold its name and address for good.
+    Only accounts without storage: nothing a user could have saved is deleted here."""
+    hours = config.unverified_account_hours()
+    if hours <= 0 or not config.require_email_verification():
+        return 0
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    n = 0
+    for user in db.query(User).filter(User.email_verified == False, User.storage_created == False,  # noqa: E712
+                                      User.created_at <= cutoff).all():
+        user_id = user.id
+        remove_unused_account(db, user)
+        audit_log(db, "unverified_account_removed", user_id=user_id)
+        n += 1
+    return n
+
+
 def _tell(user: User, what: str) -> None:
     try:
         send_security_notice_email(user.email, user.username, what)
@@ -245,6 +273,7 @@ def start_worker(session_factory, interval: float) -> Optional[threading.Thread]
         while True:
             db = session_factory()
             try:
+                remove_unverified(db)
                 expire_accounts(db)
                 apply_due(db)
             except Exception as e:      # keep the worker alive whatever happens

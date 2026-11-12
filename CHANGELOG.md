@@ -3,6 +3,46 @@
 All notable changes are listed here. Versions follow [Semantic Versioning](https://semver.org/); before
 1.0 any release may change the storage format or the API, and the release notes say how to move over.
 
+## [0.1.2] – unreleased
+
+### Security
+- **The app refuses a volume whose settings were changed on the server.** `gocryptfs.conf` is kept on the
+  server, and the list of features in it is not covered by the key check. A server that edited it could
+  make the app store the names of new files unencrypted. File contents were not affected, and files
+  written before the change kept their encrypted names. The app now accepts only the exact settings
+  it creates itself and mounts from a checked local copy, never from the server's file directly.
+  **Update the app on every computer.** Operators can then set `min_client_version: 0.1.2`.
+- **The second factor can no longer be guessed patiently.** Five wrong codes locked it for 15 minutes,
+  again and again, without the owner hearing of it. The lock now grows (15 minutes, 1 hour, then 24 hours
+  each time) and the owner gets an e-mail when it starts.
+- **The web UI's passkey sign-in no longer tells which names have an account** (the answer for an unknown
+  name is now stable between requests, and wrong answers are throttled alike).
+- **fail2ban no longer bans an address for normal sign-ins.** Every sign-in with an authenticator app
+  passes a "code required" answer that the filter counted as a failed login, so a shared office address
+  was banned after a few users signed in. The API marks that answer and the filter skips it.
+
+### Added
+- **Registration modes.** `registration: open` (default, as before), `invite` or `closed`, and optionally
+  `registration_email_domains`. The apps and the web UI ask for the invitation code.
+- **`cryptstorage-admin`** on the server: list and show accounts, lock and unlock (also closes the
+  account's storage connections), set a quota, remove a lost second factor, confirm an e-mail address,
+  delete an account, and make, list and revoke invitations. See `ansible/README.md`, "Administration".
+- Accounts whose e-mail address is not confirmed within 24 hours are removed.
+- **Database migrations** run when the API starts (`api/migrate.py`, table `schema_version`), and a
+  database from a newer version is refused instead of used. Upgrading and going back:
+  [docs/UPGRADE.md](docs/UPGRADE.md).
+- `min_client_version`: apps older than the given version ask for an update (from 0.1.2 on).
+
+### Changed
+- Build and deployment are pinned more tightly: every Python package with its hash
+  (`api/requirements.lock`), base images by digest, workflow actions by commit, the Go toolchain named in
+  `go.mod`; the dependency checks cover indirect dependencies and fail the build.
+
+### Moving over
+- Server: deploy as in [docs/UPGRADE.md](docs/UPGRADE.md). New tables are created at start-up; nothing to
+  run by hand. The playbook must be run in full (nginx and fail2ban change, not only the containers).
+- An open server stays open: set `registration` in the inventory if that is not what you want.
+
 ## [0.1.1] – 2026-11-03
 
 ### Security

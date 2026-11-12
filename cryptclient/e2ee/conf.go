@@ -10,6 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"sort"
 
 	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/scrypt"
@@ -113,8 +116,15 @@ func MakeConf(masterKey, passphrase []byte, nPow int) ([]byte, error) {
 // ErrWrongPassphrase is returned when the master key cannot be unwrapped.
 var ErrWrongPassphrase = errors.New("wrong passphrase or damaged gocryptfs.conf")
 
-// ReadMasterKey unwraps the master key from the text of gocryptfs.conf.
-func ReadMasterKey(conf, passphrase []byte) ([]byte, error) {
+// ErrUnsafeConf is returned for a gocryptfs.conf whose settings are not exactly the ones this client
+// writes. The file is kept on the server, and only the wrapped key in it is authenticated: a server
+// could otherwise switch file-name encryption off ("PlaintextNames") or change the cipher without the
+// passphrase noticing.
+var ErrUnsafeConf = errors.New("gocryptfs.conf: unsupported or unsafe parameters")
+
+// parseConf reads a config from the server and refuses anything but the format this client writes:
+// version 2, exactly our feature flags, and scrypt parameters inside the limits.
+func parseConf(conf []byte) (*confFile, error) {
 	var c confFile
 	if err := json.Unmarshal(conf, &c); err != nil {
 		return nil, fmt.Errorf("gocryptfs.conf: %w", err)
@@ -122,8 +132,70 @@ func ReadMasterKey(conf, passphrase []byte) ([]byte, error) {
 	s := c.ScryptObject
 	if c.Version != 2 || s.KeyLen != 32 || s.R != 8 || s.P != 1 ||
 		s.N < 1<<minScryptNPow || s.N > 1<<maxScryptNPow || s.N&(s.N-1) != 0 {
-		return nil, errors.New("gocryptfs.conf: unsupported or unsafe parameters")
+		return nil, ErrUnsafeConf
 	}
+	if !sameFlags(c.FeatureFlags, featureFlags) {
+		return nil, fmt.Errorf("%w: the feature flags are %v, expected %v", ErrUnsafeConf, c.FeatureFlags, featureFlags)
+	}
+	return &c, nil
+}
+
+func sameFlags(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	a, b := append([]string{}, got...), append([]string{}, want...)
+	sort.Strings(a)
+	sort.Strings(b)
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// CheckConf reports whether the text of a gocryptfs.conf is safe to mount with (see ErrUnsafeConf).
+func CheckConf(conf []byte) error {
+	_, err := parseConf(conf)
+	return err
+}
+
+// LocalConf reads the volume's gocryptfs.conf from cipherDir (the server), checks it and writes a clean
+// copy into a new private directory on this machine. The volume is mounted with that copy, so what was
+// checked is what is used, and nothing else the server put in the file (unknown fields) reaches the
+// mount. The caller removes dir.
+func LocalConf(cipherDir string) (confPath, dir string, err error) {
+	raw, err := os.ReadFile(filepath.Join(cipherDir, "gocryptfs.conf"))
+	if err != nil {
+		return "", "", err
+	}
+	c, err := parseConf(raw)
+	if err != nil {
+		return "", "", err
+	}
+	clean, err := json.MarshalIndent(c, "", "\t")
+	if err != nil {
+		return "", "", err
+	}
+	if dir, err = os.MkdirTemp("", "cryptstorage-conf-"); err != nil {
+		return "", "", err
+	}
+	confPath = filepath.Join(dir, "gocryptfs.conf")
+	if err := os.WriteFile(confPath, clean, 0o600); err != nil {
+		os.RemoveAll(dir)
+		return "", "", err
+	}
+	return confPath, dir, nil
+}
+
+// ReadMasterKey unwraps the master key from the text of gocryptfs.conf.
+func ReadMasterKey(conf, passphrase []byte) ([]byte, error) {
+	c, err := parseConf(conf)
+	if err != nil {
+		return nil, err
+	}
+	s := c.ScryptObject
 	salt, err := base64.StdEncoding.DecodeString(s.Salt)
 	if err != nil || len(salt) < 16 {
 		return nil, errors.New("gocryptfs.conf: bad salt")

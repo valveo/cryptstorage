@@ -29,7 +29,8 @@ api/
 ├── totp.py             # Two-factor (TOTP)
 ├── ssh_keys.py         # SSH public key checks
 ├── audit.py            # Audit log for security events (DB + logger)
-├── migrations/         # SQL migrations for the production database
+├── migrate.py          # Applies migrations/ at start-up (schema_version)
+├── migrations/         # Numbered SQL changes to existing tables (see its README)
 ├── socket_client.py    # Communication with the daemon (HMAC-signed)
 ├── Dockerfile
 ├── requirements.txt

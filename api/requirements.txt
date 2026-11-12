@@ -1,5 +1,11 @@
 # Direct dependencies, pinned to the versions the test suite runs against.
-# Update deliberately (and run `pip-audit -r api/requirements.txt`), not by accident.
+# The image and CI install requirements.lock, which is made from this file and also fixes every
+# indirect dependency, each with its hash. After any change here, in api/:
+#
+#   uv pip compile requirements.txt --universal --python-version 3.11 --generate-hashes \
+#       --no-header --no-annotate -o requirements.lock          (add --upgrade to renew the indirect ones)
+#
+# CI fails when the two do not match, and audits the lock file for known vulnerabilities.
 fastapi==0.143.3
 uvicorn[standard]==0.54.0
 sqlalchemy==2.1.5
