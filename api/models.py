@@ -228,3 +228,12 @@ class Invite(Base):
     expires_at = Column(DateTime, nullable=False)
     used_at    = Column(DateTime, nullable=True)
     used_by    = Column(String(36), nullable=True)
+
+
+class SchemaVersion(Base):
+    """Which schema changes this database has had (migrate.py). One row per applied migration."""
+    __tablename__ = "schema_version"
+
+    version    = Column(Integer, primary_key=True, autoincrement=False)
+    name       = Column(String(64), nullable=False)
+    applied_at = Column(DateTime, nullable=False)

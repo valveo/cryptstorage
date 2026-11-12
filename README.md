@@ -50,7 +50,7 @@ ansible-playbook -i inventory/my-hosts.yml site.yml
 
 The playbook refuses to run with `CHANGE_ME` placeholders, and the API refuses to start without
 real secrets. Set `recovery_policy` (`user`, `escrow` or `both`) and, for escrow, `escrow_public_key`
-(`scripts/escrow.py keygen`). Set up backups before inviting users ([docs/BACKUP.md](docs/BACKUP.md)).
+(`scripts/escrow.py keygen`). Set up backups before inviting users ([docs/BACKUP.md](docs/BACKUP.md)). Upgrading to a new version: [docs/UPGRADE.md](docs/UPGRADE.md).
 
 ## Using it
 
