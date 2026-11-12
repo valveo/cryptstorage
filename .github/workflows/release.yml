@@ -110,10 +110,17 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
+      # Only what the build jobs made, by name. A re-run of this job would otherwise also fetch the
+      # "release-..." artifact of the earlier attempt, old SHA256SUMS and signature included, and
+      # list them in the new SHA256SUMS.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          name: linux
           path: dist
-          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows
+          path: dist
       - name: SHA256SUMS
         working-directory: dist
         run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
@@ -137,6 +144,7 @@ jobs:
         with:
           name: release-${{ env.VERSION }}
           path: dist/
+          overwrite: true     # a re-run replaces the earlier attempt's copy
       - name: Checksums without a signature (dry run in a private repository)
         if: ${{ github.event.repository.private && github.ref_type != 'tag' }}
         working-directory: dist
@@ -146,6 +154,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft --prerelease \
-            --title "CryptStorage $VERSION" \
-            --notes "Pre-release, not independently audited. Verify the download first: docs/verify-release.md"
+          # GitHub's API answers 5xx now and then; a draft that got created half-way is removed before the next try
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A release for $GITHUB_REF_NAME exists already; not touching it."; exit 1
+          fi
+          for try in 1 2 3; do
+            if gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft --prerelease \
+                --title "CryptStorage $VERSION" \
+                --notes "Pre-release, not independently audited. Verify the download first: docs/verify-release.md"; then
+              exit 0
+            fi
+            # never a published release: only a draft of this tag may be removed
+            if [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null)" = true ]; then
+              gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes || true
+            fi
+            sleep $((try * 20))
+          done
+          exit 1
