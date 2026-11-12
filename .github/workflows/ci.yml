@@ -249,7 +249,12 @@ jobs:
       - name: Preflight only
         run: sudo ./install.sh --check
       - name: Install
-        run: sudo ./install.sh --yes --domain "$DOMAIN" --email admin@example.com --tls selfsigned --no-smtp
+        # A mail server is required, and there is none here: the name given does not exist. The
+        # next step turns e-mail confirmation off so that an account can be made without one.
+        run: |
+          echo "no mail server here" | sudo tee /root/smtp.pw >/dev/null
+          sudo ./install.sh --yes --domain "$DOMAIN" --email admin@example.com --tls selfsigned \
+            --smtp-host smtp.invalid --smtp-user ci --smtp-password-file /root/smtp.pw --smtp-from ci@example.com
       - name: The server answers and the commands are there
         run: |
           set -x
@@ -262,6 +267,12 @@ jobs:
           sudo ufw status | grep -q 'Status: active'
           sudo cryptstorage-admin users
           sudo cryptstorage-update --help | grep -q -- --full
+          cosign version 2>&1 | grep -F "v$(sed -n 's/^COSIGN_VERSION=//p' install.sh)"
+      - name: A changed setting is applied by running install.sh again
+        run: |
+          sudo sed -i 's/^\( *require_email_verification:\).*/\1 "false"/' /etc/cryptstorage/inventory.yml
+          sudo ./install.sh
+          sudo grep -q 'REQUIRE_EMAIL_VERIFICATION: *false' /opt/cryptstorage/docker-compose.yml
       - name: An account to carry through the updates
         run: |
           curl -fsS -k -H 'Content-Type: application/json' -X POST "https://$DOMAIN/api/auth/register" \
@@ -279,7 +290,8 @@ jobs:
             scripts/server-package.sh "$v" "/tmp/releases/v$v"
             ( cd "/tmp/releases/v$v" && sha256sum -- * > SHA256SUMS )
           done
-      - name: Without cosign the update stops before touching anything
+      # the packages made here carry no signature: with cosign installed the update must refuse them
+      - name: An unsigned release is refused before anything is touched
         run: |
           if sudo env "CRYPTSTORAGE_RELEASES=file:///tmp/releases" cryptstorage-update --yes --version 99.0.0; then exit 1; fi
           sudo test ! -e /var/backups/cryptstorage

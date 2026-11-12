@@ -6,6 +6,9 @@
 #   sudo ./install.sh --yes --domain storage.example.com --email admin@example.com \
 #        --smtp-host smtp.example.com --smtp-user u --smtp-password-file /root/smtp.pw --smtp-from u@example.com
 #
+# A mail server (SMTP) is required: confirming addresses, setting up the authenticator app and the
+# security notices to account owners all go by e-mail.
+#
 # It is a thin shell around the Ansible playbook in ansible/ (the same one used to install from another
 # machine, ansible/README.md): it checks the server, installs Ansible into a directory of its own,
 # writes the settings to /etc/cryptstorage/inventory.yml and runs the playbook against this machine.
@@ -18,7 +21,7 @@
 # Options for the first run (later runs read the saved settings):
 #   --domain NAME            the server's DNS name, e.g. storage.example.com
 #   --email ADDRESS          administrator's address (Let's Encrypt notices)
-#   --smtp-host HOST         mail server for confirmations and security notices; --no-smtp for none
+#   --smtp-host HOST         mail server (required)
 #   --smtp-port N            default 587 (465 = TLS from the start)
 #   --smtp-user NAME, --smtp-password-file FILE, --smtp-from ADDRESS
 #   --registration MODE      open (default) | invite | closed
@@ -39,7 +42,7 @@ MIN_DISK_MB=5000
 MIN_RAM_MB=900
 
 DOMAIN="" EMAIL="" SMTP_HOST="" SMTP_PORT=587 SMTP_USER="" SMTP_PASSWORD="" SMTP_FROM=""
-NO_SMTP=0 REGISTRATION="" TLS="letsencrypt" YES=0 CHECK_ONLY=0 UPGRADE=0 WRITE_ONLY=0
+REGISTRATION="" TLS="letsencrypt" YES=0 CHECK_ONLY=0 UPGRADE=0 WRITE_ONLY=0
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
@@ -54,14 +57,13 @@ while [ $# -gt 0 ]; do
     --smtp-user) SMTP_USER="${2:?}"; shift 2 ;;
     --smtp-password-file) SMTP_PASSWORD="$(head -n1 "${2:?}")"; shift 2 ;;
     --smtp-from) SMTP_FROM="${2:?}"; shift 2 ;;
-    --no-smtp) NO_SMTP=1; shift ;;
     --registration) REGISTRATION="${2:?}"; shift 2 ;;
     --tls) TLS="${2:?}"; shift 2 ;;
     --yes) YES=1; shift ;;
     --check) CHECK_ONLY=1; shift ;;
     --upgrade) UPGRADE=1; YES=1; shift ;;
     --write-settings-only) WRITE_ONLY=1; shift ;;      # for the tests: stop after writing the settings
-    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
@@ -83,7 +85,7 @@ sshd_port() {   # the port the SSH service listens on, so the firewall keeps it 
 }
 
 port_owner() {  # the program listening on TCP port $1, or nothing
-  ss -ltnpH "sport = :$1" 2>/dev/null | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | head -n1
+  { ss -ltnpH "sport = :$1" 2>/dev/null || true; } | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | head -n1
 }
 
 preflight() {
@@ -189,24 +191,19 @@ collect_settings() {
   ask EMAIL "Administrator's e-mail address (certificate notices)"
   [[ "$EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+$ ]] || die "'$EMAIL' is not an e-mail address"
 
-  if [ "$NO_SMTP" = 0 ] && [ -z "$SMTP_HOST" ] && [ "$YES" = 0 ]; then
+  if [ -z "$SMTP_HOST" ] && [ "$YES" = 0 ]; then
     say ""
     say "CryptStorage sends e-mail: to confirm addresses, to set up the authenticator app and to"
-    say "warn the owner about changes to the account. Without a mail server the second factor"
-    say "cannot be made mandatory. Leave the next answer empty to install without mail."
-    read -r -p "Mail server (SMTP host): " SMTP_HOST || true
+    say "warn the owner about changes to the account. It needs a mail server (SMTP) for that."
   fi
-  if [ -z "$SMTP_HOST" ]; then
-    NO_SMTP=1
-  else
-    ask SMTP_PORT "SMTP port" 587
-    ask SMTP_USER "SMTP user name"
-    if [ -z "$SMTP_PASSWORD" ]; then
-      [ "$YES" = 0 ] || die "missing setting: --smtp-password-file"
-      read -r -s -p "SMTP password: " SMTP_PASSWORD || die "no answer"; echo
-    fi
-    ask SMTP_FROM "Sender address of the messages" "$SMTP_USER"
+  ask SMTP_HOST "Mail server (SMTP host, for example smtp.example.com)"
+  ask SMTP_PORT "SMTP port" 587
+  ask SMTP_USER "SMTP user name"
+  if [ -z "$SMTP_PASSWORD" ]; then
+    [ "$YES" = 0 ] || die "missing setting: --smtp-password-file"
+    read -r -s -p "SMTP password: " SMTP_PASSWORD || die "no answer"; echo
   fi
+  ask SMTP_FROM "Sender address of the messages" "$SMTP_USER"
 
   if [ -z "$REGISTRATION" ] && [ "$YES" = 0 ]; then
     say ""
@@ -249,18 +246,7 @@ all:
     registration: $REGISTRATION
 
 YAML
-    if [ "$NO_SMTP" = 1 ]; then
-      cat << YAML
-    # No mail server was given. Users cannot confirm their address or set up the authenticator
-    # app without one, so both are off. Add smtp_host, smtp_port, smtp_user, smtp_password and
-    # smtp_from, then set require_email_verification "true" and required_factors "password,totp".
-    smtp_host: ""
-    require_email_verification: "false"
-    required_factors: "password"
-
-YAML
-    else
-      cat << YAML
+    cat << YAML
     smtp_host: $(yaml "$SMTP_HOST")
     smtp_port: $SMTP_PORT
     smtp_user: $(yaml "$SMTP_USER")
@@ -269,7 +255,6 @@ YAML
     require_email_verification: "true"
 
 YAML
-    fi
     cat << YAML
     # Secrets, made for this server. Losing totp_encryption_key disables every user's
     # authenticator app and USB stick: it must be in your copy of this file.
@@ -312,6 +297,36 @@ run_playbook() {
       "$TOOLS/venv/bin/ansible-playbook" -i "$INVENTORY" site.yml )
 }
 
+# cosign checks the signature of a release for cryptstorage-update (docs/verify-release.md). It is one
+# program from the sigstore project, not packaged by Ubuntu or Debian: a fixed version, accepted only
+# when it matches the checksum its release publishes.
+COSIGN_VERSION=2.6.5
+COSIGN_SHA256_x86_64=c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644
+COSIGN_SHA256_aarch64=426193b4c5da4d4d643e822f48fe0cc8a476ca1782a272704831f5a0cef716d7
+COSIGN_URL="${CRYPTSTORAGE_COSIGN_URL:-https://github.com/sigstore/cosign/releases/download}"
+
+install_cosign() {
+  local machine arch want tmp dest="${CRYPTSTORAGE_BIN:-/usr/local/bin}/cosign"
+  if command -v cosign >/dev/null 2>&1; then return 0; fi
+  machine=$(uname -m)
+  case "$machine" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) return 0 ;; esac
+  want="COSIGN_SHA256_$machine"; want=${!want}
+  tmp=$(mktemp)
+  say "Installing cosign $COSIGN_VERSION (checks release signatures for cryptstorage-update)..."
+  if ! curl -fsSL --proto '=https,file' --retry 3 -o "$tmp" "$COSIGN_URL/v$COSIGN_VERSION/cosign-linux-$arch"; then
+    rm -f "$tmp"
+    warn "cosign could not be downloaded. CryptStorage is installed; cryptstorage-update will ask for cosign (docs/verify-release.md)."
+    return 0
+  fi
+  if ! echo "$want  $tmp" | sha256sum -c --quiet - >/dev/null 2>&1; then
+    rm -f "$tmp"
+    warn "the downloaded cosign does NOT match its published checksum and was not installed. Try again later; if it repeats, report it (SECURITY.md)."
+    return 0
+  fi
+  install -m 0755 -o "$(id -u)" -g "$(id -g)" "$tmp" "$dest"
+  rm -f "$tmp"
+}
+
 install_update_command() {
   install -m 0750 -o root -g root "$SRC/scripts/update.sh" "$SBIN/cryptstorage-update"
   mkdir -p "$ETC"
@@ -347,11 +362,13 @@ else
   fi
   write_inventory
 fi
+if [ -n "${CRYPTSTORAGE_ONLY_COSIGN:-}" ]; then install_cosign; exit 0; fi    # for the tests
 [ "$WRITE_ONLY" = 0 ] || exit 0
 
 install_ansible
 run_playbook
 install_update_command
+install_cosign
 
 say ""
 say "CryptStorage is installed: https://$DOMAIN"
@@ -359,10 +376,6 @@ say "  Settings and secrets:  $INVENTORY   (keep a copy off the server)"
 say "  Accounts, invitations: cryptstorage-admin --help"
 say "  Backups:               cryptstorage-backup /srv/backups        (docs/BACKUP.md)"
 say "  New versions:          cryptstorage-update                     (docs/UPGRADE.md)"
-if grep -q '^ *smtp_host: ""' "$INVENTORY"; then
-  say ""
-  warn "No mail server is set: the authenticator app is optional and addresses are not confirmed. Add the SMTP settings to $INVENTORY and run install.sh again."
-fi
 if [ "$TLS" = selfsigned ]; then
   warn "The certificate is self-signed: for tests and closed networks only."
 fi

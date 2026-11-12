@@ -31,20 +31,27 @@ def script(path, body):
 # ---------------------------------------------------------------------------------------------
 
 def install(tmp_path, *args, os_release='ID=ubuntu\nVERSION_ID="24.04"\nPRETTY_NAME="Ubuntu 24.04 LTS"\n',
-            listening=""):
+            listening="", extra=None):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
+    (tmp_path / "mail.pw").write_text("mail password\n")
     # `ss -ltnpH "sport = :80"`: what listens on that port
     script(bin_dir / "ss", f'case "$2" in {listening} esac\n')
     (tmp_path / "os-release").write_text(os_release)
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CRYPTSTORAGE_ETC=str(tmp_path / "etc"),
                CRYPTSTORAGE_OS_RELEASE=str(tmp_path / "os-release"), CRYPTSTORAGE_SKIP_SYSTEM_CHECKS="1",
                CRYPTSTORAGE_INSTALL_DIR=str(tmp_path / "opt"))
+    env.update(extra or {})
     return subprocess.run([INSTALL, *args], capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
 
 
 FIRST = ("--write-settings-only", "--yes", "--domain", "storage.example.com", "--email", "admin@example.com",
          "--tls", "selfsigned")
+SMTP = ("--smtp-host", "smtp.example.com", "--smtp-user", "mailer")
+
+
+def with_smtp(tmp_path):
+    return (*FIRST, *SMTP, "--smtp-password-file", str(tmp_path / "mail.pw"))
 
 
 def test_first_run_writes_private_settings_the_playbook_accepts(tmp_path):
@@ -74,18 +81,22 @@ def test_first_run_writes_private_settings_the_playbook_accepts(tmp_path):
                 v["totp_encryption_key"]}) == 5
 
 
-def test_without_a_mail_server_the_second_factor_is_optional_and_the_settings_say_why(tmp_path):
+def test_a_mail_server_is_required(tmp_path):
+    r = install(tmp_path, *FIRST)
+    assert r.returncode == 1 and "missing setting: Mail server" in r.stderr
+    assert not (tmp_path / "etc" / "inventory.yml").exists()
     r = install(tmp_path, *FIRST, "--no-smtp")
-    assert r.returncode == 0, r.stdout + r.stderr
-    text = (tmp_path / "etc" / "inventory.yml").read_text()
-    v = yaml.safe_load(text)["all"]["vars"]
-    assert v["smtp_host"] == "" and v["require_email_verification"] == "false" and v["required_factors"] == "password"
-    assert v["registration"] == "open"
-    assert "No mail server was given" in text
+    assert r.returncode == 1 and "unknown option" in r.stderr
+
+
+def test_registration_is_open_unless_chosen(tmp_path):
+    assert install(tmp_path, *with_smtp(tmp_path)).returncode == 0
+    v = yaml.safe_load((tmp_path / "etc" / "inventory.yml").read_text())["all"]["vars"]
+    assert v["registration"] == "open" and v["smtp_password"] == "mail password"
 
 
 def test_a_second_run_keeps_the_saved_settings_and_secrets(tmp_path):
-    assert install(tmp_path, *FIRST, "--no-smtp").returncode == 0
+    assert install(tmp_path, *with_smtp(tmp_path)).returncode == 0
     inv = tmp_path / "etc" / "inventory.yml"
     before = inv.read_text()
     r = install(tmp_path, "--write-settings-only", "--yes", "--domain", "other.example.com", "--email", "x@example.com")
@@ -100,7 +111,7 @@ def test_a_second_run_keeps_the_saved_settings_and_secrets(tmp_path):
     ('ID=fedora\nVERSION_ID="42"\nPRETTY_NAME="Fedora 42"\n', "not supported"),
 ])
 def test_an_unsupported_system_is_refused_before_anything_is_written(tmp_path, os_release, message):
-    r = install(tmp_path, *FIRST, "--no-smtp", os_release=os_release)
+    r = install(tmp_path, *with_smtp(tmp_path), os_release=os_release)
     assert r.returncode == 1
     assert message in r.stdout and "Nothing was changed" in r.stderr
     assert not (tmp_path / "etc").exists()
@@ -132,7 +143,7 @@ def test_missing_answers_with_yes_are_an_error_not_a_guess(tmp_path):
 def test_a_server_installed_from_another_machine_is_not_given_new_secrets(tmp_path):
     (tmp_path / "opt").mkdir()
     (tmp_path / "opt" / "docker-compose.yml").write_text("services: {}\n")
-    r = install(tmp_path, *FIRST, "--no-smtp")
+    r = install(tmp_path, *with_smtp(tmp_path))
     assert r.returncode == 1 and "installed from another machine" in r.stderr
     assert not (tmp_path / "etc").exists()
 
@@ -140,6 +151,36 @@ def test_a_server_installed_from_another_machine_is_not_given_new_secrets(tmp_pa
 def test_upgrade_needs_the_saved_settings(tmp_path):
     r = install(tmp_path, "--upgrade")
     assert r.returncode == 1 and "was not installed with install.sh" in r.stderr
+
+
+def cosign_install(tmp_path, content):
+    """install.sh's cosign step alone, with the download served from a directory."""
+    import platform
+    arch = {"x86_64": "amd64", "aarch64": "arm64"}[platform.machine()]
+    rel = tmp_path / "cosign-releases"
+    for line in open(INSTALL):
+        if line.startswith("COSIGN_VERSION="):
+            version = line.strip().split("=")[1]
+    (rel / f"v{version}").mkdir(parents=True)
+    (rel / f"v{version}" / f"cosign-linux-{arch}").write_bytes(content)
+    (tmp_path / "localbin").mkdir()
+    r = install(tmp_path, *with_smtp(tmp_path), extra={
+        "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "CRYPTSTORAGE_ONLY_COSIGN": "1",
+        "CRYPTSTORAGE_BIN": str(tmp_path / "localbin"), "CRYPTSTORAGE_COSIGN_URL": f"file://{rel}"})
+    return r, tmp_path / "localbin" / "cosign"
+
+
+@pytest.mark.skipif(os.uname().machine not in ("x86_64", "aarch64"), reason="cosign is installed on x86_64 and aarch64")
+def test_a_cosign_download_that_does_not_match_the_pinned_checksum_is_not_installed(tmp_path):
+    r, dest = cosign_install(tmp_path, b"not cosign")
+    assert r.returncode == 0, r.stdout + r.stderr          # the installation itself is done by then
+    assert "does NOT match its published checksum" in r.stderr
+    assert not dest.exists()
+
+
+def test_the_pinned_cosign_checksums_are_two_different_sha256(tmp_path):
+    sums = re.findall(r"^COSIGN_SHA256_(x86_64|aarch64)=([0-9a-f]{64})$", open(INSTALL).read(), re.M)
+    assert len(sums) == 2 and sums[0][1] != sums[1][1]
 
 
 # ---------------------------------------------------------------------------------------------

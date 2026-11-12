@@ -41,20 +41,22 @@ What it does:
 3. **Installs Ansible into a directory of its own** (`/opt/cryptstorage-installer`, a Python
    virtual environment), so nothing else on the system depends on it, and runs the playbook against
    the local machine.
-4. Installs `cryptstorage-update` next to `cryptstorage-backup` and `cryptstorage-admin`.
+4. Installs `cryptstorage-update` next to `cryptstorage-backup` and `cryptstorage-admin`, and
+   `cosign` (a fixed version, accepted only when it matches its published checksum) so that
+   `cryptstorage-update` can check release signatures. If it cannot be downloaded the installation
+   still completes and says so.
 
 Run `install.sh` again whenever you have edited the settings: it reads the saved file, asks
 nothing and only fixes what differs. Options given on a later run are ignored; the file decides.
 
-Three differences from a remote Ansible run, all on purpose:
+Differences from a remote Ansible run, all on purpose:
 
 - **SSH password logins are left as they are** (`ssh_keys_only: false`), because the script cannot
   know how you reach the server. Set it to `true` in the settings once you sign in with a key.
 - **The firewall keeps the port open that sshd really listens on** (`ssh_port`), not just 22.
-- **Without a mail server** (`--no-smtp`, or an empty answer) e-mail confirmation is off and the
-  authenticator app is optional (`required_factors: "password"`), because users cannot set it up
-  without mail. That is a weaker server. Add the SMTP settings and set
-  `require_email_verification: "true"` and `required_factors: "password,totp"` before real use.
+- **A mail server is required.** Confirming addresses, setting up the authenticator app and the
+  security notices to account owners all go by e-mail, so `install.sh` does not install without the
+  SMTP settings.
 
 `--tls selfsigned` makes a self-signed certificate instead of asking Let's Encrypt. It is for tests
 and closed networks: browsers warn, and the apps must be given the server's pin.
@@ -188,7 +190,7 @@ ansible/
 | `recovery_policy`, `escrow_public_key` | `user`, `escrow` or `both` (docs/design-e2ee.md) |
 | `registration` | Who may create an account: `open` (anyone who reaches the server; the default), `invite` (only with a code from `cryptstorage-admin invite create`) or `closed`. **Set `invite` or `closed` on a server that is not meant for the public** |
 | `registration_email_domains` | Optional. Only addresses of these domains may register, e.g. `example.org,example.com` |
-| `min_client_version` | Optional, e.g. `0.1.2`. Clients older than this tell their user to update instead of opening the storage (clients before 0.1.2 do not know the setting and are not stopped by it) |
+| `min_client_version` | Optional, e.g. `0.1.3`. Clients older than this tell their user to update instead of opening the storage (clients before 0.1.3 do not know the setting and are not stopped by it) |
 | `latest_client_version` | Optional. The newest app version; older apps (0.1.3 and later) tell their user that an update exists and where the releases are. Default: the server's own release version, since server and app are released together. The server only announces the number: the download address is fixed in the app |
 | `required_factors`, `change_delay_hours` | Account protection (docs/design-factors.md) |
 | `server_timezone`, `server_locale` | Optional, e.g. `Europe/Helsinki`, `fi_FI.UTF-8` (default UTC, image locale) |

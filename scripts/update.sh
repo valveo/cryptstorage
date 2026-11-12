@@ -146,7 +146,7 @@ print(".".join(map(str, best)) if best else "")
   say "  checksum matches SHA256SUMS"
 
   if [ "$SIGCHECK" = 1 ]; then
-    command -v cosign >/dev/null 2>&1 || die "cosign is not installed, so the release signature cannot be checked. Install cosign (docs/verify-release.md) and run this again. To go on without the check, trusting the download address alone: --no-signature-check. Nothing was changed."
+    command -v cosign >/dev/null 2>&1 || die "cosign is not installed, so the release signature cannot be checked. install.sh installs it (run it again), or see docs/verify-release.md. To go on without the check, trusting the download address alone: --no-signature-check. Nothing was changed."
     fetch SHA256SUMS.sigstore.json || die "the release has no SHA256SUMS.sigstore.json"
     cosign verify-blob --bundle "$work/SHA256SUMS.sigstore.json" \
       --certificate-identity "$SIGNER_REPO/.github/workflows/release.yml@refs/tags/v$VERSION" \

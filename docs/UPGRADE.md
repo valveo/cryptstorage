@@ -19,8 +19,8 @@ sudo cryptstorage-update             # back up, then install the newest
 `cryptstorage-update` never runs by itself; you start it when the moment suits. It then
 
 1. downloads the release's server package and checks it against the signed `SHA256SUMS`
-   ([verify-release.md](verify-release.md)). **It needs `cosign` for that** and stops without it;
-   `--no-signature-check` goes on regardless, trusting the download address alone;
+   ([verify-release.md](verify-release.md)) with `cosign`, which `install.sh` installed. Without
+   `cosign` it stops; `--no-signature-check` goes on regardless, trusting the download address alone;
 2. checks that the server can run the new version;
 3. takes a backup into `/var/backups/cryptstorage` (`--backup-dir` for another place);
 4. installs the new version with the saved settings and waits until the server reports it.
@@ -59,7 +59,7 @@ already has its settings on the server, by running the new version's `sudo ./ins
 2. On the machine you deploy from, get the new version (a release tag, not `main`) and check it
    ([verify-release.md](verify-release.md)):
    ```
-   git fetch --tags && git checkout v0.1.2
+   git fetch --tags && git checkout v0.1.3
    ```
 3. Deploy it with the same inventory as before:
    ```
@@ -80,8 +80,8 @@ already has its settings on the server, by running the new version's `sudo ./ins
    Then sign in with one account and open its storage.
 6. Update the apps on the users' computers. If the release fixes a security problem in the app, tell
    the users, and once they have updated set `min_client_version` in the inventory (for example
-   `0.1.2`) and run the playbook again: apps older than that then ask for an update instead of opening
-   the storage. Apps older than 0.1.2 do not know this setting and are not stopped by it.
+   `0.1.3`) and run the playbook again: apps older than that then ask for an update instead of opening
+   the storage. Apps older than 0.1.3 do not know this setting and are not stopped by it.
 
 ## If the API does not start after an upgrade
 
