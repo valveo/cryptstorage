@@ -6,6 +6,11 @@
 # The deploy writes it to api/BUILD_VERSION and webui/BUILD_VERSION, which the API and the web UI show.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# A release's server package (cryptstorage-server-X.Y.Z.tar.gz) has no git history: it carries the line in VERSION.
+if [ -f VERSION ] && [ ! -e .git ]; then
+  cat VERSION
+  exit 0
+fi
 sha=$(git rev-parse --short=7 HEAD 2>/dev/null) || { echo dev; exit 0; }
 date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%d HEAD)
 if tag=$(git describe --tags --exact-match HEAD 2>/dev/null); then

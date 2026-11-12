@@ -17,7 +17,9 @@ From the [release page](https://github.com/valveo/cryptstorage/releases), downlo
 - `SHA256SUMS`,
 - `SHA256SUMS.sigstore.json`.
 
-`SHA256SUMS` lists every file of the release; you only need the ones for your system.
+`SHA256SUMS` lists every file of the release; you only need the ones for your system. The server
+package (`cryptstorage-server-0.1.3.tar.gz`, from 0.1.3 on) is checked the same way;
+`cryptstorage-update` on a server does these steps itself when `cosign` is installed there.
 
 ## 1. Get cosign
 

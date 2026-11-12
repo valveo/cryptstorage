@@ -2,6 +2,29 @@
 # roles/ssl/tasks/main.yml
 # Nginx reverse proxy + Let's Encrypt SSL
 
+# tls_mode: selfsigned puts a certificate of our own where Let's Encrypt would put its one, so the
+# rest of the role (and the backup) works unchanged and certbot is never asked. Browsers and the
+# apps do not trust it: for tests and closed networks, where the clients pin the key anyway.
+- name: Self-signed certificate instead of Let's Encrypt
+  when: tls_mode | default('letsencrypt') == 'selfsigned'
+  block:
+    - name: Directory of the self-signed certificate
+      ansible.builtin.file:
+        path: /etc/letsencrypt/live/{{ domain }}
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Create the self-signed certificate
+      ansible.builtin.command: >
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 825
+        -subj "/CN={{ domain }}" -addext "subjectAltName=DNS:{{ domain }}"
+        -keyout /etc/letsencrypt/live/{{ domain }}/privkey.pem
+        -out /etc/letsencrypt/live/{{ domain }}/fullchain.pem
+      args:
+        creates: /etc/letsencrypt/live/{{ domain }}/fullchain.pem
+
 # The HTTP-only configuration is needed only until the first certificate exists; on later
 # runs it would replace the HTTPS configuration for a moment and report a change every time.
 - name: Check for an existing certificate
@@ -58,6 +81,7 @@
     --email {{ letsencrypt_email }}
     --redirect
     --reuse-key
+  when: tls_mode | default('letsencrypt') != 'selfsigned'
   args:
     creates: /etc/letsencrypt/live/{{ domain }}/fullchain.pem
   notify: Reload nginx
@@ -112,6 +136,7 @@
     day: "*/7"
     job: certbot renew --quiet --reuse-key --post-hook "systemctl reload nginx"
     user: root
+  when: tls_mode | default('letsencrypt') != 'selfsigned'
 
 - name: Test nginx configuration
   ansible.builtin.command: nginx -t

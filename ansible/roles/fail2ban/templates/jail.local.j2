@@ -11,7 +11,7 @@ backend  = systemd
 # The host's own sshd (reads the systemd journal)
 [sshd]
 enabled  = true
-port     = ssh
+port     = {{ ssh_port | default('ssh') }}
 maxretry = 4
 bantime  = 2h
 

@@ -14,8 +14,12 @@ server {
     # SSL (managed by certbot)
     ssl_certificate     /etc/letsencrypt/live/{{ domain }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ domain }}/privkey.pem;
+{% if tls_mode | default('letsencrypt') == 'selfsigned' %}
+    ssl_protocols       TLSv1.2 TLSv1.3;
+{% else %}
     include             /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+{% endif %}
 
     # Security headers
     add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;

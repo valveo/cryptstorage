@@ -3,6 +3,39 @@
 All notable changes are listed here. Versions follow [Semantic Versioning](https://semver.org/); before
 1.0 any release may change the storage format or the API, and the release notes say how to move over.
 
+## [0.1.3] – unreleased
+
+### Added
+- **The app says when a newer version exists.** The server announces the newest app version
+  (`latest_client_version`, by default its own release version), and an older app shows a notice
+  on the command line and an "Update to version X..." entry in the tray menu. Nothing is downloaded
+  or installed by itself. The entry opens the project's release page: that address is fixed in the
+  app, so a server can announce a number but cannot send users to a download of its own.
+- **`install.sh`: installing on the server itself.** It checks the server (system, memory, disk,
+  ports, DNS), asks for the domain, mail server and registration mode, generates the secrets, saves
+  the settings in `/etc/cryptstorage/inventory.yml` and runs the same Ansible playbook as before
+  against the local machine, with Ansible in a directory of its own. Running it again applies
+  changed settings. `--check` only looks. Installing from another machine works as before.
+- **`cryptstorage-update`** on a server installed that way: downloads the new version's server
+  package, checks it against the signed `SHA256SUMS` (needs `cosign`; `--no-signature-check` to go
+  without), checks the server, **takes a backup**, installs and waits for the server to report the
+  new version. The backup holds what an upgrade changes (database, SFTPGo state, settings, keys);
+  **`--full`** makes it complete, the users' files included. It runs only when started by hand.
+- **Releases carry a server package** (`cryptstorage-server-X.Y.Z.tar.gz`), listed in the signed
+  `SHA256SUMS` like the app files.
+- `cryptstorage-backup --without-files`, and `/etc/cryptstorage` in every backup when it exists.
+- Settings `tls_mode: selfsigned` (tests and closed networks) and `ssh_port` (the firewall and
+  fail2ban follow the port sshd really uses; default 22 as before).
+
+### Changed
+- CI installs a server from scratch with `install.sh` and updates it twice with
+  `cryptstorage-update`, on every change to the server side.
+
+### Moving over
+- Nothing to do for a server installed from another machine. To manage such a server with
+  `install.sh` and `cryptstorage-update` instead, see `ansible/README.md`, "Moving the settings
+  onto the server". **Do not run `install.sh` with new settings on an existing server**; it refuses.
+
 ## [0.1.2] – unreleased
 
 ### Security
