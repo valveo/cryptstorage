@@ -112,7 +112,9 @@ services:
       - {{ install_dir }}/sftpgo:/var/lib/sftpgo
 
   db:
-    image: mariadb:11
+    # By digest, like SFTPGo above. Dependabot does not read this template: raise both by hand
+    # (docker buildx imagetools inspect mariadb:11) and test a restore before deploying.
+    image: mariadb:11@sha256:d36f18d65a0459510b8b0f643b226a6d299e3206486e2b64ff20754a6d291707
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: {{ db_root_password }}

@@ -45,7 +45,7 @@ jobs:
     if: ${{ github.event.inputs.show_logs == 'true' }}
     runs-on: [self-hosted, linux]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: scripts/ci_sudo.sh
       - name: API log and recent sign-in events
         run: |
@@ -64,7 +64,7 @@ jobs:
           [ -d "$GITHUB_WORKSPACE" ] || exit 0
           [ -z "$(find "$GITHUB_WORKSPACE" ! -user "$(id -un)" -print -quit)" ] && exit 0
           printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: scripts/ci_sudo.sh
       - name: Install on this machine
         env:
@@ -89,9 +89,9 @@ jobs:
     runs-on: [self-hosted, linux]
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: scripts/ci_sudo.sh
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: cryptclient/go.mod
       - name: Client integration tests against the deployed server

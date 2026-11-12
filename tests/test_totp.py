@@ -152,14 +152,14 @@ def test_owner_is_told_when_the_code_is_locked_and_the_lock_grows(tc, monkeypatc
     monkeypatch.setattr(main, "_totp_failures", EscalatingLockout(clock=clock))
     told = []
     monkeypatch.setattr(main, "send_security_notice_email", lambda email, user, what, action="": told.append((email, what)))
-    make_user(tc, "erin")
-    secret, _ = _enrol(tc, "erin")
+    make_user(tc, "totp_locked")
+    secret, _ = _enrol(tc, "totp_locked")
     told.clear()
-    bad = {"username": "erin", "password": PASSWORD, "totp_code": "000000"}
+    bad = {"username": "totp_locked", "password": PASSWORD, "totp_code": "000000"}
     assert [tc.post("/auth/login", json=bad).status_code for _ in range(4)] == [401] * 4
     assert told == []
     assert tc.post("/auth/login", json=bad).status_code == 401
-    assert len(told) == 1 and told[0][0] == "erin@example.com"
+    assert len(told) == 1 and told[0][0] == "totp_locked@example.com"
     assert "15 minutes" in told[0][1] and "password" in told[0][1]
     # locked: even the right code waits, and nothing more is sent
     good = dict(bad, totp_code=totp.code_for_step(secret, totp.current_step()))
@@ -167,7 +167,7 @@ def test_owner_is_told_when_the_code_is_locked_and_the_lock_grows(tc, monkeypatc
     assert r.status_code == 429 and 890 < int(r.headers["Retry-After"]) <= 901
     assert len(told) == 1
     with database.SessionLocal() as db:
-        uid = db.query(models.User).filter_by(username="erin").one().id
+        uid = db.query(models.User).filter_by(username="totp_locked").one().id
         assert db.query(models.SecurityEvent).filter_by(user_id=uid, event_type="totp_locked").count() == 1
 
     clock.now += 901

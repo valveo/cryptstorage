@@ -64,12 +64,6 @@
     group: root
     mode: '0640'
 
-- name: Pull MariaDB image
-  community.docker.docker_image:
-    name: mariadb
-    tag: "11"
-    source: pull
-
 - name: Start Docker Compose stack
   community.docker.docker_compose_v2:
     project_src: "{{ install_dir }}"

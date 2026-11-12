@@ -70,7 +70,7 @@ jobs:
             if (-not $said) { Write-Host "Waiting for the Linux CI run ($($busy[0].html_url))"; $said = $true }
             Start-Sleep -Seconds 20
           }
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Who runs this
         run: |
           $ErrorActionPreference = "Continue"
@@ -83,7 +83,7 @@ jobs:
           if ($g) { $m += "go=found" } else { $m += "go=missing" }
           Write-Host ("::notice title=machine::" + ($m -join " | "))
           exit 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: cryptclient/go.mod
           cache: false

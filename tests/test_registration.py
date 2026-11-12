@@ -158,3 +158,12 @@ def test_unconfirmed_accounts_stay_when_verification_is_off(client, monkeypatch)
         assert pending.remove_unverified(db) == 0
     assert _user("unv_keep") is not None
     _make_young("unv_keep")
+
+
+def test_minimum_client_version_is_published_and_checked(client, monkeypatch):
+    monkeypatch.setenv("MIN_CLIENT_VERSION", "v0.1.2")
+    assert client.get("/server-info").json()["min_client_version"] == "0.1.2"
+    config.validate()
+    monkeypatch.setenv("MIN_CLIENT_VERSION", "newest")
+    with pytest.raises(config.ConfigError):
+        config.validate()
