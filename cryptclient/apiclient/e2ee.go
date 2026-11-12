@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,7 +32,24 @@ type ServerInfo struct {
 	Registration string `json:"registration"`
 	// MinClientVersion is the oldest client the server's administrator accepts ("0.1.2"); empty: any.
 	MinClientVersion string `json:"min_client_version"`
+	// LatestClientVersion is the newest client version the server knows of; empty: unknown.
+	LatestClientVersion string `json:"latest_client_version"`
 }
+
+// NewerClient is the version to update to when this program is older than the newest the server
+// knows of, else "". The server only says that a newer version exists: where to get it is fixed in
+// the program (ReleasesURL), so a server cannot point its users at a download of its choosing.
+func (s *ServerInfo) NewerClient() string {
+	if s != nil && VersionOlder(ClientVersion, s.LatestClientVersion) {
+		return strings.TrimPrefix(strings.TrimSpace(s.LatestClientVersion), "v")
+	}
+	return ""
+}
+
+// ReleasesURL is where new versions are published, with checksums and a signature
+// (docs/verify-release.md). Set at build time by an organisation that distributes its own builds:
+// -ldflags "-X cryptclient/apiclient.ReleasesURL=https://..."
+var ReleasesURL = "https://github.com/valveo/cryptstorage/releases/latest"
 
 // E2EEStorage from GET /storage/e2ee: where to connect for the ciphertext.
 type E2EEStorage struct {
@@ -54,7 +72,36 @@ func (c *Client) ServerInfo() (*ServerInfo, error) {
 		return nil, fmt.Errorf("%w: this is version %s and the server asks for %s or newer",
 			ErrClientTooOld, ClientVersion, r.MinClientVersion)
 	}
+	noteUpdate(r.NewerClient())
 	return &r, nil
+}
+
+var (
+	updateMu      sync.Mutex
+	updateVersion string
+	// OnUpdateAvailable, when set, is called once for each newer version a server reports
+	OnUpdateAvailable func(version string)
+)
+
+func noteUpdate(version string) {
+	if version == "" {
+		return
+	}
+	updateMu.Lock()
+	first := version != updateVersion
+	updateVersion = version
+	hook := OnUpdateAvailable
+	updateMu.Unlock()
+	if first && hook != nil {
+		hook(version)
+	}
+}
+
+// AvailableUpdate is the newer version a server reported in this run of the program, or "".
+func AvailableUpdate() string {
+	updateMu.Lock()
+	defer updateMu.Unlock()
+	return updateVersion
 }
 
 // ClientVersion is this program's release version ("0.1.2"), set by main at start. A development

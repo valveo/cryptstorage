@@ -102,7 +102,8 @@ def test_server_info_and_escrow_policy(e2, monkeypatch):
                     "recovery_policy": "user",
                     "escrow_public_key": None, "escrow_key_fingerprint": None,
                     "account_lifetime_hours": None, "server_id": None, "kdf_version": 2,
-                    "registration": "open", "min_client_version": None}
+                    "registration": "open", "min_client_version": None,
+                    "latest_client_version": None}
     make_user(e2, "liam")
     h = bearer(e2, "liam")
     blob = "ab" * 92

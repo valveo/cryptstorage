@@ -82,6 +82,7 @@ func cmdTrayDesktop() bool {
 
 	shell := &linuxShell{d: d, quitCh: make(chan struct{})}
 	a := &trayApp{shell: shell}
+	a.watchUpdates()
 	t, err := sni.Start(sni.Config{
 		ID:      "cryptstorage",
 		Title:   "CryptStorage",

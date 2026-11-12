@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"cryptclient/apiclient"
+	"cryptclient/browserlogin"
 	"cryptclient/tray"
 	"cryptclient/usb"
 	"cryptclient/wingui"
@@ -78,6 +80,7 @@ const (
 	menuVersion
 	menuExit
 	menuServerLine
+	menuUpdate
 )
 
 type trayApp struct {
@@ -90,6 +93,17 @@ type trayApp struct {
 	checking bool          // a look for the stick is running
 	declined string        // a stick whose password question the user cancelled, until it is removed
 	webLogin bool          // a sign-in to the web page is running
+}
+
+// watchUpdates says so once when the server reports a newer version of the app, and puts it in the menu.
+// Nothing is downloaded or installed by itself: the menu item opens the page of the releases.
+func (a *trayApp) watchUpdates() {
+	apiclient.OnUpdateAvailable = func(version string) {
+		go func() {
+			a.shell.menuChanged()
+			a.notify(updateNotice(version) + " Choose \"Update to version " + version + "...\" in the menu of the padlock " + a.shell.iconPlace() + ".")
+		}()
+	}
 }
 
 func (a *trayApp) ui() appUI { return appUI{a.shell.dialogs(), a} }
@@ -165,6 +179,9 @@ func (a *trayApp) menu() []menuItem {
 	if dir := syncDir(); dir != "" {
 		items = append(items, menuItem{ID: menuOpenSync, Text: "Open synchronised folder", Disabled: a.state != wingui.Connected})
 	}
+	if v := apiclient.AvailableUpdate(); v != "" {
+		items = append(items, menuItem{}, menuItem{ID: menuUpdate, Text: "Update to version " + v + "..."})
+	}
 	return append(items,
 		menuItem{},
 		menuItem{ID: menuWebLogin, Text: "Open account web page...", Disabled: a.webLogin},
@@ -209,6 +226,10 @@ func (a *trayApp) click(id int) {
 		}
 	case menuServer:
 		a.changeServer()
+	case menuUpdate:
+		if err := browserlogin.OpenBrowser(apiclient.ReleasesURL); err != nil {
+			a.ui().Error("Could not open the browser. The new version is at " + apiclient.ReleasesURL)
+		}
 	case menuExit:
 		a.disconnect(time.Minute)
 		a.shell.quit()

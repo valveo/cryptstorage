@@ -239,6 +239,8 @@ class ServerInfo(BaseModel):
     registration: str = "open"
     # The oldest client the administrator accepts ("0.1.2"); None: any
     min_client_version: Optional[str] = None
+    # The newest client version ("0.1.3"): an older app tells its user that an update exists. None: unknown
+    latest_client_version: Optional[str] = None
 
 
 class E2EEStorageResponse(BaseModel):

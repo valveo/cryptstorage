@@ -116,6 +116,7 @@ ansible/
 | `registration` | Who may create an account: `open` (anyone who reaches the server; the default), `invite` (only with a code from `cryptstorage-admin invite create`) or `closed`. **Set `invite` or `closed` on a server that is not meant for the public** |
 | `registration_email_domains` | Optional. Only addresses of these domains may register, e.g. `example.org,example.com` |
 | `min_client_version` | Optional, e.g. `0.1.2`. Clients older than this tell their user to update instead of opening the storage (clients before 0.1.2 do not know the setting and are not stopped by it) |
+| `latest_client_version` | Optional. The newest app version; older apps (0.1.3 and later) tell their user that an update exists and where the releases are. Default: the server's own release version, since server and app are released together. The server only announces the number: the download address is fixed in the app |
 | `required_factors`, `change_delay_hours` | Account protection (docs/design-factors.md) |
 | `server_timezone`, `server_locale` | Optional, e.g. `Europe/Helsinki`, `fi_FI.UTF-8` (default UTC, image locale) |
 | `swap_size_mb` | Swap file made when RAM < 2 GB (default 2048, `0` = never) |

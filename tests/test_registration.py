@@ -167,3 +167,17 @@ def test_minimum_client_version_is_published_and_checked(client, monkeypatch):
     monkeypatch.setenv("MIN_CLIENT_VERSION", "newest")
     with pytest.raises(config.ConfigError):
         config.validate()
+
+
+def test_latest_client_version_follows_the_server_release_unless_set(client, monkeypatch):
+    assert config.latest_client_version("0.1.3 (2026-11-20)") == "0.1.3"
+    assert config.latest_client_version("0.1.3") == "0.1.3"
+    for dev in ("dev", "dev+9151441 (2026-10-29)", "0.1.3-modified (2026-11-20)", ""):
+        assert config.latest_client_version(dev) == ""
+    assert client.get("/server-info").json()["latest_client_version"] is None      # the tests run a dev build
+    monkeypatch.setenv("LATEST_CLIENT_VERSION", "v0.2.0")
+    assert client.get("/server-info").json()["latest_client_version"] == "0.2.0"
+    config.validate()
+    monkeypatch.setenv("LATEST_CLIENT_VERSION", "latest")
+    with pytest.raises(config.ConfigError):
+        config.validate()
