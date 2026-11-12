@@ -125,6 +125,34 @@ ansible/
 
 ---
 
+## Registration by invitation
+
+By default anyone who reaches the server can create an account (`registration: open`). That suits a
+public or demo server. For a company, a club or a family, switch to invitations:
+
+1. In your inventory set
+   ```yaml
+   registration: invite
+   # registration_email_domains: example.org     # optional: only these addresses
+   ```
+   and run the playbook (`ansible-playbook -i inventory/my-hosts.yml site.yml`). Existing accounts
+   are not affected.
+2. For each new person make a code on the server:
+   ```bash
+   sudo cryptstorage-admin invite create --email bob@example.org --note "Bob, sales"
+   ```
+   It prints the code once. `--email` ties the code to that address (recommended: a forwarded code is
+   then useless to anyone else); `--days` sets how long it is valid (default 7).
+3. Send the code to the person over a channel you trust. They run `cryptclient setup` (or use the
+   web UI's Register tab), which asks for it. A code works for one registration.
+4. `sudo cryptstorage-admin invite list` shows which codes are open, used or expired, and
+   `invite revoke <id>` removes an unused one.
+
+`registration: closed` refuses every registration, with or without a code: use it when everyone is in,
+or to pause sign-ups. Switching between the modes only needs the inventory line and a playbook run.
+
+---
+
 ## Administration
 
 The playbook installs `cryptstorage-admin` on the server (it runs `api/admin.py` inside the API container):
