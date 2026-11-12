@@ -20,6 +20,7 @@ Settings:
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -196,6 +197,22 @@ def web_authentication_options(user_id: str, credential_ids: list[str]) -> tuple
         user_verification=UserVerificationRequirement.REQUIRED,
     )
     return json.loads(options_to_json(options)), _make_session(user_id, "web", challenge)
+
+
+DECOY_PREFIX = "-"
+
+
+def decoy(username: str) -> tuple[str, list[str]]:
+    """What /auth/web/passkey/begin answers for a name without passkeys: a session subject that is no
+    user id, and credential ids that look like a real account's. Both come from the name and a server
+    key, so asking twice gives the same answer, as it does for a real account. (Random ids, as before,
+    told the two apart with two requests.) Mostly one id, sometimes two, like real accounts."""
+    mac = hmac.new(SECRET_KEY.encode(), b"cryptstorage/passkey-decoy/v1\x00" + username.strip().lower().encode(),
+                   hashlib.sha512).digest()
+    ids = [b64url(mac[:32])]
+    if mac[63] < 77:        # about 30 %
+        ids.append(b64url(hashlib.sha256(mac[32:]).digest()))
+    return DECOY_PREFIX + mac[32:48].hex(), ids
 
 
 def open_web_session(session: str) -> tuple[str, bytes]:

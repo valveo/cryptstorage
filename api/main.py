@@ -624,7 +624,8 @@ def web_passkey_begin(request: Request, req: WebPasskeyBegin, db: Session = Depe
     user = db.query(User).filter(User.username == req.username, User.is_active == True).first()
     creds = _user_passkeys(db, user.id) if user and user.totp_enabled else []
     if not creds:
-        options, session = passkeys.web_authentication_options("-", [passkeys.b64url(os.urandom(32))])
+        subject, ids = passkeys.decoy(req.username)
+        options, session = passkeys.web_authentication_options(subject, ids)
         return {"options": options, "session": session}
     options, session = passkeys.web_authentication_options(user.id, [c.credential_id for c in creds])
     return {"options": options, "session": session}
@@ -640,13 +641,17 @@ def web_passkey_finish(request: Request, req: PasskeyLoginFinish, db: Session = 
         user_id, challenge = passkeys.open_web_session(req.session)
     except passkeys.PasskeyError as e:
         raise HTTPException(status_code=401, detail=str(e))
+    # Throttled by the session's subject before anything is looked up, so a name without passkeys
+    # (passkeys.decoy) is slowed down exactly like a real account and the two cannot be told apart
+    retry = _web_passkey_failures.blocked(user_id)
+    if retry:
+        audit_log(db, "web_login_passkey_throttled", ip_address=ip,
+                  user_id=None if user_id.startswith(passkeys.DECOY_PREFIX) else user_id)
+        raise _too_many(retry)
     user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
     if not user or not user.totp_enabled:
+        _web_passkey_failures.record_failure(user_id)
         raise HTTPException(status_code=401, detail="This passkey is not registered for this account.")
-    retry = _web_passkey_failures.blocked(user.id)
-    if retry:
-        audit_log(db, "web_login_passkey_throttled", user_id=user.id, ip_address=ip)
-        raise _too_many(retry)
     cid = passkeys.answer_credential_id(req.credential)
     cred = db.query(WebAuthnCredential).filter(
         WebAuthnCredential.user_id == user.id,
