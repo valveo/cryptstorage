@@ -12,7 +12,7 @@ import main
 import models
 import pending
 import totp
-from throttle import FailureTracker
+from throttle import EscalatingLockout, FailureTracker
 
 import test_api_security as base
 from test_api_security import PASSWORD, bearer, make_user
@@ -25,7 +25,7 @@ NEW_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKkyGJlmV6LVYPJdvSO8ClDc8yXLrCyZB
 @pytest.fixture
 def c(client, monkeypatch):
     """The API with a 24-hour delay, recording the daemon calls and the notices with their links."""
-    monkeypatch.setattr(main, "_totp_failures", FailureTracker(5, 900))
+    monkeypatch.setattr(main, "_totp_failures", EscalatingLockout())
     monkeypatch.setenv("CHANGE_DELAY_HOURS", "24")
     calls, mails = [], []
     provision = lambda user, key=None, quota=None: calls.append(("provision", user, key)) or "sdabc"  # noqa: E731

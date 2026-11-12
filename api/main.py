@@ -102,7 +102,7 @@ from email_verification import send_enrolment_code_email, send_security_notice_e
 import pending
 import registration
 import time
-from throttle import FailureTracker
+from throttle import EscalatingLockout, FailureTracker
 from schemas import (
     TotpDisableRequest,
     TotpEnableRequest,
@@ -136,8 +136,13 @@ limiter = Limiter(key_func=get_client_ip)
 _login_by_ip_user = FailureTracker(limit=5, window=900)
 _login_by_user = FailureTracker(limit=30, window=3600)
 _pw_failures = FailureTracker(limit=5, window=900)   # password re-checks by a logged-in user
-# Second-factor guesses, per account. A 6-digit code is only safe because guesses are limited.
-_totp_failures = FailureTracker(limit=5, window=900)
+# Second-factor guesses, per account. A 6-digit code is only safe because guesses are limited:
+# five wrong codes lock the code for 15 minutes, the next five for an hour, then for a day each time,
+# and the owner is told by e-mail (_second_factor_failed).
+_totp_failures = EscalatingLockout(limit=5, window=900, lockouts=(900, 3600, 86400))
+# The web UI's passkey sign-in needs no password, so anyone who knows a user name can fail it. Counted
+# apart from the above, so that such failures can never lock the owner's code or grow into a day's lock.
+_web_passkey_failures = FailureTracker(limit=5, window=900)
 
 TOTP_ISSUER = os.getenv("TOTP_ISSUER", "CryptStorage")
 
@@ -270,6 +275,27 @@ def _accept_second_factor(db: Session, user: User, code: str) -> bool:
     return False
 
 
+def _lock_length(seconds: int) -> str:
+    if seconds >= 86400:
+        return f"{seconds // 3600} hours"
+    return "1 hour" if seconds == 3600 else f"{max(1, seconds // 60)} minutes"
+
+
+def _second_factor_failed(request: Request, db: Session, user: User, event: str) -> None:
+    """A wrong code from someone who got past the password (or holds a session). When it is the one
+    that locks the code, the owner hears of it: this is what a stolen password looks like."""
+    ip = get_client_ip(request)
+    locked = _totp_failures.record_failure(user.id)
+    audit_log(db, event, user_id=user.id, ip_address=ip)
+    if locked:
+        audit_log(db, "totp_locked", user_id=user.id, ip_address=ip, detail=f"seconds={locked}")
+        _notify(user, f"The second step of signing in to your account (the code from your authenticator app, "
+                      f"or a passkey) failed {_totp_failures.limit} times in a row, after the right password. "
+                      f"That step is locked for {_lock_length(locked)}. If this was not you, someone knows "
+                      "your password: change it as soon as you can sign in. Further failures lock it for "
+                      "longer each time.")
+
+
 # Marks a 401 that is a step of a sign-in, not a failure (see _check_second_factor)
 AUTH_STEP_HEADER = "X-Auth-Step"
 
@@ -293,8 +319,7 @@ def _check_second_factor(request: Request, db: Session, user: User, code: Option
     if _accept_second_factor(db, user, code):
         _totp_failures.reset(user.id)
         return
-    _totp_failures.record_failure(user.id)
-    audit_log(db, "login_totp_failed", user_id=user.id, ip_address=ip)
+    _second_factor_failed(request, db, user, "login_totp_failed")
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification code.")
 
 
@@ -316,8 +341,7 @@ def _check_second_factor_again(request: Request, db: Session, user: User, code: 
     if retry:
         raise _too_many(retry)
     if not _accept_second_factor(db, user, code):
-        _totp_failures.record_failure(user.id)
-        audit_log(db, f"{event}_totp_failed", user_id=user.id, ip_address=get_client_ip(request))
+        _second_factor_failed(request, db, user, f"{event}_totp_failed")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification code.")
     _totp_failures.reset(user.id)
     db.refresh(user)
@@ -569,8 +593,7 @@ def passkey_login_finish(request: Request, req: PasskeyLoginFinish, db: Session 
             raise passkeys.PasskeyError("This passkey is not registered for this account.")
         count = passkeys.verify_authentication(challenge, req.credential, cred.public_key, cred.sign_count or 0)
     except passkeys.PasskeyError as e:
-        _totp_failures.record_failure(user.id)
-        audit_log(db, "login_passkey_failed", user_id=user.id, ip_address=ip)
+        _second_factor_failed(request, db, user, "login_passkey_failed")
         raise HTTPException(status_code=401, detail=str(e))
     _totp_failures.reset(user.id)
     cred.sign_count = count
@@ -620,7 +643,7 @@ def web_passkey_finish(request: Request, req: PasskeyLoginFinish, db: Session = 
     user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
     if not user or not user.totp_enabled:
         raise HTTPException(status_code=401, detail="This passkey is not registered for this account.")
-    retry = _totp_failures.blocked(user.id)
+    retry = _web_passkey_failures.blocked(user.id)
     if retry:
         audit_log(db, "web_login_passkey_throttled", user_id=user.id, ip_address=ip)
         raise _too_many(retry)
@@ -635,10 +658,10 @@ def web_passkey_finish(request: Request, req: PasskeyLoginFinish, db: Session = 
         count = passkeys.verify_authentication(challenge, req.credential, cred.public_key, cred.sign_count or 0,
                                                require_user_verification=True)
     except passkeys.PasskeyError as e:
-        _totp_failures.record_failure(user.id)
+        _web_passkey_failures.record_failure(user.id)
         audit_log(db, "web_login_passkey_failed", user_id=user.id, ip_address=ip)
         raise HTTPException(status_code=401, detail=str(e))
-    _totp_failures.reset(user.id)
+    _web_passkey_failures.reset(user.id)
     cred.sign_count = count
     cred.last_used_at = datetime.utcnow()
     user.last_login = datetime.utcnow()
@@ -1163,8 +1186,7 @@ def totp_enable(
     if not totp.check_enrolment_code(current_user.id, current_user.totp_secret_enc, req.email_code):
         step = None
     if step is None:
-        _totp_failures.record_failure(current_user.id)
-        audit_log(db, "totp_enable_failed", user_id=current_user.id, ip_address=get_client_ip(request))
+        _second_factor_failed(request, db, current_user, "totp_enable_failed")
         raise HTTPException(status_code=401, detail="Invalid verification code or e-mail code.")
     _totp_failures.reset(current_user.id)
     codes = totp.generate_backup_codes()
@@ -1199,8 +1221,7 @@ def totp_disable(
     if retry:
         raise _too_many(retry)
     if not _accept_second_factor(db, current_user, req.code):
-        _totp_failures.record_failure(current_user.id)
-        audit_log(db, "totp_disable_failed", user_id=current_user.id, ip_address=get_client_ip(request))
+        _second_factor_failed(request, db, current_user, "totp_disable_failed")
         raise HTTPException(status_code=401, detail="Invalid verification code.")
     _totp_failures.reset(current_user.id)
     db.refresh(current_user)
