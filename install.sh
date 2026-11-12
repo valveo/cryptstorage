@@ -125,7 +125,8 @@ preflight() {
   for p in 80 443 "${SFTP_PORT:-2222}"; do
     who=$(port_owner "$p")
     case "$who" in
-      ""|nginx|docker-proxy|sftpgo) ok "port $p${who:+ (already ours: $who)}" ;;
+      # dockerd itself holds the published ports when its userland proxy is off, as the playbook sets it
+      ""|nginx|dockerd|docker-proxy|sftpgo) ok "port $p${who:+ (already ours: $who)}" ;;
       *) problem "port $p is used by '$who': stop or move that service first" ;;
     esac
   done

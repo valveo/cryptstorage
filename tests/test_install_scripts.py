@@ -115,6 +115,11 @@ def test_a_port_taken_by_another_program_is_a_problem_but_our_own_services_are_n
     r = install(tmp_path, "--check", listening=ours)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "port 80 (already ours: nginx)" in r.stdout
+
+    # the SFTP port is published by Docker, whose daemon holds it itself when the userland proxy is off
+    docker = """*:2222) echo 'LISTEN 0 4096 *:2222 *:* users:(("dockerd",pid=1,fd=4))' ;;"""
+    r = install(tmp_path, "--check", listening=docker)
+    assert r.returncode == 0 and "port 2222 (already ours: dockerd)" in r.stdout
     assert not (tmp_path / "etc").exists()          # --check changes nothing
 
 
