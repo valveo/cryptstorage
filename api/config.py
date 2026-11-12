@@ -8,6 +8,10 @@ every restart (as REFRESH_TOKEN_HMAC_KEY did).
 """
 
 import os
+import re
+
+
+_VERSION = re.compile(r"\d+\.\d+\.\d+")
 
 
 class ConfigError(RuntimeError):
@@ -94,6 +98,40 @@ def account_lifetime_hours() -> float:
     return float(os.getenv("ACCOUNT_LIFETIME_HOURS", "0") or 0)
 
 
+# ---------------------------------------------------------------------------------------------
+# Who may create an account. "open": anyone who reaches the server (the default, as before).
+# "invite": only with an invitation code the administrator made (admin.py invite create).
+# "closed": nobody; the administrator opens it for a while or hands out invitations.
+# REGISTRATION_EMAIL_DOMAINS narrows any mode to addresses of the listed domains.
+# ---------------------------------------------------------------------------------------------
+REGISTRATION_MODES = ("open", "invite", "closed")
+
+
+def registration() -> str:
+    return os.getenv("REGISTRATION", "open").strip().lower() or "open"
+
+
+def registration_email_domains() -> set[str]:
+    raw = os.getenv("REGISTRATION_EMAIL_DOMAINS", "")
+    return {d.strip().lower().lstrip("@") for d in raw.split(",") if d.strip()}
+
+
+def require_email_verification() -> bool:
+    return os.getenv("REQUIRE_EMAIL_VERIFICATION", "true").strip().lower() == "true"
+
+
+def unverified_account_hours() -> float:
+    """An account whose e-mail address was never confirmed is removed after this long (the link in the
+    e-mail works for 24 hours). 0 = such accounts are kept."""
+    return float(os.getenv("UNVERIFIED_ACCOUNT_HOURS", "24") or 0)
+
+
+def min_client_version() -> str:
+    """The oldest client this server's administrator accepts, e.g. "0.1.2". Empty: any. Sent in
+    /server-info; a client older than this tells its user to update instead of opening the storage."""
+    return os.getenv("MIN_CLIENT_VERSION", "").strip().lstrip("v")
+
+
 def change_delay_hours() -> float:
     """How long a new SSH key or an account deletion waits before it takes effect."""
     return float(os.getenv("CHANGE_DELAY_HOURS", "24"))
@@ -123,6 +161,10 @@ def validate() -> None:
             raise ValueError
     except ValueError:
         raise ConfigError("CHANGE_DELAY_HOURS must be a number of hours, 0 or more.")
+    if registration() not in REGISTRATION_MODES:
+        raise ConfigError(f"REGISTRATION must be one of {REGISTRATION_MODES}.")
+    if min_client_version() and not _VERSION.fullmatch(min_client_version()):
+        raise ConfigError("MIN_CLIENT_VERSION must look like 0.1.2.")
     if recovery_policy() not in RECOVERY_POLICIES:
         raise ConfigError(f"RECOVERY_POLICY must be one of {RECOVERY_POLICIES}.")
     if recovery_policy() != "user":

@@ -111,3 +111,8 @@ def daemon_e2ee_delete(user_id: str) -> None:
 
 def daemon_e2ee_usage(user_id: str, quota_bytes: int) -> dict:
     return _send_command({"action": "e2ee_usage", "user_id": user_id, "quota_bytes": quota_bytes})
+
+
+def daemon_e2ee_set_enabled(user_id: str, enabled: bool) -> None:
+    """Lock (False) or unlock the user's SFTP account; locking ends its open connections."""
+    _send_command({"action": "e2ee_set_enabled", "user_id": user_id, "enabled": enabled})

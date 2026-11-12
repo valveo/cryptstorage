@@ -97,6 +97,30 @@ def test_set_key_replaces_and_provision_without_key_keeps_it(server):
     assert user["public_keys"] == [KEY2] and user["quota_size"] == 2 * 1024 ** 3
 
 
+def test_locked_account_refuses_logins_and_stays_locked_through_other_changes(server, tmp_path):
+    priv = tmp_path / "k"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(priv)], check=True)
+    pub = (tmp_path / "k.pub").read_text().strip()
+    a = sg.provision("lockme", pub, 1024 ** 3)
+    sftp = ["sftp", "-q", "-i", str(priv), "-P", str(server.sftp), "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes", "-b", "-", f"{a}@127.0.0.1"]
+    assert subprocess.run(sftp, input="ls\n", text=True, capture_output=True).returncode == 0
+
+    sg.set_enabled("lockme", False)
+    user = sg._call("GET", f"/users/{a}")
+    assert user["status"] == 0 and user["public_keys"] == [pub] and user["quota_size"] == 1024 ** 3
+    assert subprocess.run(sftp, input="ls\n", text=True, capture_output=True).returncode != 0
+    sg.provision("lockme", None, 2 * 1024 ** 3)           # a quota change
+    sg.set_key("lockme", KEY2)                            # a delayed key change that becomes due
+    assert sg._call("GET", f"/users/{a}")["status"] == 0
+    sg.set_key("lockme", pub)
+
+    sg.set_enabled("lockme", True)
+    assert sg._call("GET", f"/users/{a}")["status"] == 1
+    assert subprocess.run(sftp, input="ls\n", text=True, capture_output=True).returncode == 0
+    sg.set_enabled("never_made", False)                   # no storage yet: nothing to do, no error
+
+
 def test_set_key_for_unknown_user_fails(server):
     with pytest.raises(sg.ProvisionError):
         sg.set_key("nobodyhere", KEY)

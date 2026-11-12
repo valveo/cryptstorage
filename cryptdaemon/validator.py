@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Allowed actions: the daemon only manages an SFTP chroot of ciphertext and never receives a key
 # (docs/design-e2ee.md).
-VALID_ACTIONS = {"e2ee_provision", "e2ee_set_key", "e2ee_delete", "e2ee_usage"}
+VALID_ACTIONS = {"e2ee_provision", "e2ee_set_key", "e2ee_delete", "e2ee_usage", "e2ee_set_enabled"}
 
 # NOTE: all patterns are used with fullmatch(). With match() and a trailing "$",
 # Python would accept a value followed by a single newline ("bob\n").
@@ -45,6 +45,7 @@ ALLOWED_FIELDS = {
     "e2ee_set_key":   _BASE_FIELDS | {"ssh_public_key"},
     "e2ee_delete":    _BASE_FIELDS,
     "e2ee_usage":     _BASE_FIELDS | {"quota_bytes"},
+    "e2ee_set_enabled": _BASE_FIELDS | {"enabled"},
 }
 
 MAX_QUOTA_BYTES = 2 ** 63 - 1
@@ -64,6 +65,7 @@ def validate_command(command: dict) -> None:
         { "action": "e2ee_set_key", "user_id": "bob", "ssh_public_key": "ssh-ed25519 AAAA..." }
         { "action": "e2ee_delete", "user_id": "bob" }
         { "action": "e2ee_usage", "user_id": "bob", "quota_bytes": 10737418240 }
+        { "action": "e2ee_set_enabled", "user_id": "bob", "enabled": false }
 
     Raises ValidationError if anything is invalid.
     """
@@ -111,5 +113,8 @@ def validate_command(command: dict) -> None:
         quota = command.get("quota_bytes")
         if isinstance(quota, bool) or not isinstance(quota, int) or not (0 <= quota <= MAX_QUOTA_BYTES):
             raise ValidationError("quota_bytes must be a non-negative integer.")
+
+    if action == "e2ee_set_enabled" and not isinstance(command.get("enabled"), bool):
+        raise ValidationError("enabled must be true or false.")
 
     logger.debug(f"Command validated: action={action}, user_id={user_id}")

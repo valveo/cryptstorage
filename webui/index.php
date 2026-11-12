@@ -136,7 +136,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $kdf_version = ($_POST['kdf_version'] ?? '1') === '2' ? 2 : 1;
         $res = login_key_ok($password)
-            ? $api->register($username, $email, $password, $kdf_version)
+            ? $api->register($username, $email, $password, $kdf_version, trim($_POST['invite'] ?? ''))
             : ['detail' => t(LOGIN_KEY_ERROR)];
 
         if (isset($res['message']) && !isset($res['error']) && !isset($res['detail'])) {
@@ -150,6 +150,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = implode(' ', $msgs);
             } else {
                 $error = $res['detail'] ?? $res['error'] ?? t('Registration failed.');
+                if (isset(REGISTRATION_ERRORS[$error])) {
+                    $error = t(REGISTRATION_ERRORS[$error]);
+                }
             }
         }
     }
@@ -445,7 +448,9 @@ if ($need_totp && ($step = login2())) {
   <?php else: ?>
   <div class="tabs">
     <button class="tab <?= $mode === 'login'    ? 'active' : '' ?>" data-mode="login"><?= t('Sign in') ?></button>
+    <?php if (registration_mode() !== 'closed' || $mode === 'register'): ?>
     <button class="tab <?= $mode === 'register' ? 'active' : '' ?>" data-mode="register"><?= t('Register') ?></button>
+    <?php endif; ?>
   </div>
 
   <!-- Without the password: this page comes from the server, so a password typed here is only as
@@ -486,6 +491,15 @@ if ($need_totp && ($step = login2())) {
       <input type="email" name="email" autocomplete="email"
              value="<?= htmlspecialchars($_POST['email'] ?? '') ?>">
     </div>
+
+    <?php if (registration_mode() === 'invite'): ?>
+    <div class="field" id="field-invite" style="<?= $mode === 'login' ? 'display:none' : '' ?>">
+      <label><?= t('Invitation code') ?></label>
+      <input type="text" name="invite" autocomplete="off" maxlength="128"
+             value="<?= htmlspecialchars($_POST['invite'] ?? '') ?>">
+      <div class="hint"><?= t('This server takes new accounts by invitation. You get the code from its administrator.') ?></div>
+    </div>
+    <?php endif; ?>
 
     <div class="field">
       <label><?= t('Password') ?></label>
@@ -540,6 +554,8 @@ function setMode(m) {
   if (safe) { safe.style.display = m === 'login' ? '' : 'none'; }
   document.getElementById('form').style.display = (m === 'register' || (pwLogin && pwLogin.open)) ? '' : 'none';
   document.getElementById('field-email').style.display  = m === 'register' ? '' : 'none';
+  var inv = document.getElementById('field-invite');
+  if (inv) { inv.style.display = m === 'register' ? '' : 'none'; }
   var pw2 = document.getElementById('field-pw2');
   if (pw2) { pw2.style.display = m === 'register' ? '' : 'none'; }
   var pw = document.querySelector('input[data-derive-pw]');

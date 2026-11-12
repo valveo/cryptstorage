@@ -100,6 +100,7 @@ import config
 from auth import DUMMY_HASH, password_needs_rehash
 from email_verification import send_enrolment_code_email, send_security_notice_email
 import pending
+import registration
 import time
 from throttle import FailureTracker
 from schemas import (
@@ -363,15 +364,29 @@ def register(request: Request, req: RegisterRequest, db: Session = Depends(get_d
     first call to /storage/e2ee.
     """
 
+    try:
+        registration.check(req.email)
+    except registration.Refused as e:
+        raise HTTPException(status_code=403, detail=str(e))
     if config.max_users() and db.query(User).count() >= config.max_users():
         raise HTTPException(status_code=503, detail="This server has reached its user limit. Try again later.")
+    user_id = str(uuid.uuid4())
+    try:
+        # Before the name and the address are looked up: without an invitation the answer says
+        # nothing about which accounts exist
+        registration.claim_invite(db, req.invite, req.email, user_id)
+    except registration.Refused as e:
+        db.rollback()
+        raise HTTPException(status_code=403, detail=str(e))
     if db.query(User).filter(User.username == req.username).first():
+        db.rollback()
         raise HTTPException(status_code=409, detail="Username already taken.")
     if db.query(User).filter(User.email == req.email).first():
+        db.rollback()
         raise HTTPException(status_code=409, detail="Email already registered.")
 
     user = User(
-        id=str(uuid.uuid4()),
+        id=user_id,
         username=req.username,
         email=req.email,
         password_hash=hash_password(req.password),
@@ -392,8 +407,7 @@ def register(request: Request, req: RegisterRequest, db: Session = Depends(get_d
             send_verification_email(req.email, req.username, token)
         except EmailError as e:
             logger.error(f"Failed to send verification email to {req.email}: {e}")
-            db.delete(user)
-            db.commit()
+            pending.remove_unused_account(db, user)
             raise HTTPException(status_code=500, detail="Failed to send verification email.")
         message = f"Registered. Check your email ({req.email}) to verify your account."
 
@@ -1252,6 +1266,8 @@ def server_info(db: Session = Depends(get_db)):
         "server_id": sticks.server_id(),
         "kdf_version": kdf.CURRENT,
         "kdf_salt": kdf.ensure_salt(db),
+        "registration": config.registration(),
+        "min_client_version": config.min_client_version() or None,
     }
 
 

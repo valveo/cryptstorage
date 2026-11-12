@@ -113,12 +113,42 @@ ansible/
 | `sftp_port` | Public port of the SFTP storage service (default 2222) |
 | `storage_dir` | Where the users' ciphertext is kept (default `/srv/cryptstorage`) |
 | `recovery_policy`, `escrow_public_key` | `user`, `escrow` or `both` (docs/design-e2ee.md) |
+| `registration` | Who may create an account: `open` (anyone who reaches the server; the default), `invite` (only with a code from `cryptstorage-admin invite create`) or `closed`. **Set `invite` or `closed` on a server that is not meant for the public** |
+| `registration_email_domains` | Optional. Only addresses of these domains may register, e.g. `example.org,example.com` |
+| `min_client_version` | Optional, e.g. `0.1.2`. Clients older than this tell their user to update instead of opening the storage (clients before 0.1.2 do not know the setting and are not stopped by it) |
 | `required_factors`, `change_delay_hours` | Account protection (docs/design-factors.md) |
 | `server_timezone`, `server_locale` | Optional, e.g. `Europe/Helsinki`, `fi_FI.UTF-8` (default UTC, image locale) |
 | `swap_size_mb` | Swap file made when RAM < 2 GB (default 2048, `0` = never) |
 | `demo_quota_mb`, `demo_max_users`, `demo_account_lifetime_hours` | **Demo server only.** Quota of new accounts, cap on accounts, and deletion of accounts (with their data) after N hours. Off by default |
 | `client_downloads_src` | Optional. A folder **on the control node** with the client builds (Windows installer, `.deb`, binaries, as `.github/workflows/release.yml` makes them). The playbook serves them at `https://<domain>/download/` with a page listing their SHA-256 sums, and the web UI links to it. Re-run with `--tags downloads` after a new build; files no longer in the folder are removed. Empty = no download page |
 | `ssh_keys_only` | Turn off SSH password logins (default true; skipped if `ansible_password` is set) |
+
+---
+
+## Administration
+
+The playbook installs `cryptstorage-admin` on the server (it runs `api/admin.py` inside the API container):
+
+```bash
+sudo cryptstorage-admin users                     # all accounts; --state locked|unverified|active
+sudo cryptstorage-admin show alice                # one account: state, storage used, second factor
+sudo cryptstorage-admin lock alice                # no sign-in, sessions ended, storage connections closed; data kept
+sudo cryptstorage-admin unlock alice
+sudo cryptstorage-admin quota alice 20G           # or 500M
+sudo cryptstorage-admin reset-2fa alice           # removes the authenticator app and passkeys; the user is told by e-mail
+sudo cryptstorage-admin verify alice              # mark the e-mail address confirmed (the e-mail did not arrive)
+sudo cryptstorage-admin delete alice --yes        # the account and all its data, at once
+sudo cryptstorage-admin invite create --email bob@example.org --days 7
+sudo cryptstorage-admin invite list
+sudo cryptstorage-admin invite revoke <id>
+```
+
+Every change is written to the audit log (`security_events`, `admin_*`). The command cannot open anyone's
+files or reset a forgotten password: the keys exist only on the users' side. Before `reset-2fa`, make sure
+who is asking: after it the password alone signs in until the user sets up a new second factor.
+
+An account whose e-mail address is not confirmed within 24 hours is removed (the link has expired by
+then), so an unfinished or mistyped registration does not hold its name and address for good.
 
 ---
 
@@ -155,7 +185,8 @@ The storage service itself is the `sftpgo` container of the compose file (pinned
 
 ### cryptstack
 Starts Docker Compose (api + webui + db + sftpgo) and installs the backup script as
-`/usr/local/sbin/cryptstorage-backup` (docs/BACKUP.md).
+`/usr/local/sbin/cryptstorage-backup` (docs/BACKUP.md) and the administration command as
+`/usr/local/sbin/cryptstorage-admin` (see Administration above).
 
 ### ssl
 Nginx reverse proxy; obtains the Let's Encrypt certificate

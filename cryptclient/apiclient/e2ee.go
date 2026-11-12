@@ -1,7 +1,10 @@
 package apiclient
 
 import (
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -23,6 +26,11 @@ type ServerInfo struct {
 	// empty from older servers, which then get version 1 keys.
 	KdfSalt    string `json:"kdf_salt"`
 	KdfVersion int    `json:"kdf_version"`
+	// Registration says who may create an account: "open", "invite" (an invitation code is asked for) or
+	// "closed". Empty from older servers, which are open.
+	Registration string `json:"registration"`
+	// MinClientVersion is the oldest client the server's administrator accepts ("0.1.2"); empty: any.
+	MinClientVersion string `json:"min_client_version"`
 }
 
 // E2EEStorage from GET /storage/e2ee: where to connect for the ciphertext.
@@ -42,7 +50,50 @@ func (c *Client) ServerInfo() (*ServerInfo, error) {
 	if err := c.get("/server-info", &r); err != nil {
 		return nil, err
 	}
+	if VersionOlder(ClientVersion, r.MinClientVersion) {
+		return nil, fmt.Errorf("%w: this is version %s and the server asks for %s or newer",
+			ErrClientTooOld, ClientVersion, r.MinClientVersion)
+	}
 	return &r, nil
+}
+
+// ClientVersion is this program's release version ("0.1.2"), set by main at start. A development
+// build ("dev...") is never refused as too old.
+var ClientVersion = "dev"
+
+// ErrClientTooOld: the server's administrator requires a newer client (ServerInfo.MinClientVersion).
+var ErrClientTooOld = errors.New("this version of the app is too old for this server; install the current one")
+
+// VersionOlder reports whether release version have ("0.1.1", "v0.1.1") is older than want. False
+// when either is not a plain release version, so an unknown build is not locked out.
+func VersionOlder(have, want string) bool {
+	a, okA := versionParts(have)
+	b, okB := versionParts(want)
+	if !okA || !okB {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
+}
+
+func versionParts(v string) ([3]int, bool) {
+	var out [3]int
+	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(v), "v"), ".")
+	if len(parts) != 3 {
+		return out, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
 }
 
 // Register creates the account. loginKey is e2ee.Keys.AuthKey, made with key derivation version 1.
@@ -52,10 +103,35 @@ func (c *Client) Register(username, email, loginKey string) error {
 
 // RegisterVersion creates the account with a login key made with the given key derivation version.
 func (c *Client) RegisterVersion(username, email, loginKey string, kdfVersion int) error {
-	var r map[string]interface{}
-	return c.post("/auth/register", map[string]interface{}{
+	return c.RegisterInvited(username, email, loginKey, kdfVersion, "")
+}
+
+// RegisterInvited is RegisterVersion with the invitation code a server asks for when its
+// ServerInfo.Registration is "invite" ("" on other servers).
+func (c *Client) RegisterInvited(username, email, loginKey string, kdfVersion int, invite string) error {
+	body := map[string]interface{}{
 		"username": username, "email": email, "password": loginKey, "kdf_version": kdfVersion,
-	}, &r)
+	}
+	if invite != "" {
+		body["invite"] = invite
+	}
+	var r map[string]interface{}
+	err := c.post("/auth/register", body, &r)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		if msg, ok := registrationRefusals[apiErr.Detail]; ok {
+			return errors.New(msg)
+		}
+	}
+	return err
+}
+
+// The server's reasons for refusing a registration (api/registration.py), in words
+var registrationRefusals = map[string]string{
+	"REGISTRATION_CLOSED":  "this server does not take new accounts; ask its administrator",
+	"INVITE_REQUIRED":      "this server takes new accounts by invitation only; ask its administrator for a code",
+	"INVITE_INVALID":       "the invitation code is not valid: it is wrong, used, expired, or meant for another e-mail address",
+	"EMAIL_DOMAIN_REFUSED": "this server does not take accounts with that e-mail address",
 }
 
 // KdfVersion is the key derivation version of the signed-in account's login key (1 from older servers).

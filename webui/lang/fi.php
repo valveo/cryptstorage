@@ -262,4 +262,17 @@ return [
     'The two passwords do not match.' => 'Salasanat eivät täsmää.',
     'This browser cannot prepare your password securely. Use a current browser.'
         => 'Tämä selain ei pysty käsittelemään salasanaa turvallisesti. Käytä ajantasaista selainta.',
+
+    // registration modes
+    'Invitation code' => 'Kutsukoodi',
+    'This server takes new accounts by invitation. You get the code from its administrator.'
+        => 'Tälle palvelimelle rekisteröidytään kutsulla. Koodin saat palvelimen ylläpitäjältä.',
+    'This server does not take new accounts. Ask its administrator.'
+        => 'Tälle palvelimelle ei voi luoda uusia tilejä. Kysy palvelimen ylläpitäjältä.',
+    'This server takes new accounts by invitation only. Enter your invitation code.'
+        => 'Tälle palvelimelle rekisteröidytään vain kutsulla. Anna kutsukoodisi.',
+    'The invitation code is not valid: it is wrong, used, expired, or meant for another e-mail address.'
+        => 'Kutsukoodi ei kelpaa: se on väärä, käytetty, vanhentunut tai tarkoitettu toiselle sähköpostiosoitteelle.',
+    'This server does not take accounts with that e-mail address.'
+        => 'Tälle palvelimelle ei voi luoda tiliä tällä sähköpostiosoitteella.',
 ];

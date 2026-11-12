@@ -18,6 +18,13 @@ def test_valid_commands_pass():
     validate_command({"action": "e2ee_set_key", "user_id": "alice", "ssh_public_key": SSH})
     validate_command({"action": "e2ee_delete", "user_id": "alice"})
     validate_command({"action": "e2ee_usage", "user_id": "alice", "quota_bytes": 10 * 2**30})
+    validate_command({"action": "e2ee_set_enabled", "user_id": "alice", "enabled": False})
+
+
+@pytest.mark.parametrize("extra", [{}, {"enabled": "no"}, {"enabled": 0}, {"enabled": True, "quota_bytes": 1}])
+def test_set_enabled_wants_exactly_one_boolean(extra):
+    with pytest.raises(ValidationError):
+        validate_command({"action": "e2ee_set_enabled", "user_id": "alice", **extra})
 
 
 @pytest.mark.parametrize("action", ["mount", "umount", "create", "get_usage", "delete", "status"])

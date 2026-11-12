@@ -102,6 +102,9 @@ func Run(env Env) (*Result, error) {
 	// 2. The server
 	api := env.API("")
 	info, err := api.ServerInfo()
+	if errors.Is(err, apiclient.ErrClientTooOld) {
+		return nil, fail(ui, err, "Download the current version from your server's download page or the project's releases.")
+	}
 	if err != nil {
 		return nil, fail(ui, fmt.Errorf("cannot reach the server: %w", err), "Check your internet connection and the server address (CRYPTSTORAGE_SERVER in the settings file).")
 	}
@@ -146,8 +149,16 @@ func Run(env Env) (*Result, error) {
 		ui.Say("")
 		ui.Say("Your files are encrypted with this password. Nobody can reset it for you.")
 		ui.Say("If you forget it, only the recovery code you get at the end brings your files back.")
+		if info.Registration == "closed" {
+			return nil, fail(ui, errors.New("this server does not take new accounts"), "Ask the server's administrator.")
+		}
 		email := strings.TrimSpace(ui.Ask("Your e-mail address: "))
-		if err := api.RegisterVersion(username, email, ks.Current.AuthKey, ks.Version); err != nil {
+		invite := ""
+		if info.Registration == "invite" {
+			ui.Say("This server takes new accounts by invitation.")
+			invite = strings.TrimSpace(ui.Ask("Invitation code from the administrator: "))
+		}
+		if err := api.RegisterInvited(username, email, ks.Current.AuthKey, ks.Version, invite); err != nil {
 			return nil, fail(ui, fmt.Errorf("could not create the account: %w", err), "")
 		}
 		res.NewAccount = true

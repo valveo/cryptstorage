@@ -44,6 +44,12 @@ services:
       # Wait before a new SSH key or an account deletion takes effect; the owner can cancel
       CHANGE_DELAY_HOURS:          "{{ change_delay_hours | default(24) }}"
       SFTP_PORT:                   "{{ sftp_port | default(2222) }}"
+      # Who may create an account: open (anyone), invite (cryptstorage-admin invite create) or closed
+      REGISTRATION:                "{{ registration | default('open') }}"
+      # Only addresses of these domains may register (comma-separated); empty = any
+      REGISTRATION_EMAIL_DOMAINS:  "{{ registration_email_domains | default('') }}"
+      # The oldest client version accepted, e.g. 0.1.2; empty = any
+      MIN_CLIENT_VERSION:          "{{ min_client_version | default('') }}"
       # DEMO SERVER ONLY (all off by default; see api/config.py)
       DEFAULT_QUOTA_MB:            "{{ demo_quota_mb | default(10240) }}"
       MAX_USERS:                   "{{ demo_max_users | default(0) }}"

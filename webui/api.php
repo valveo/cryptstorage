@@ -16,8 +16,11 @@ class ApiClient {
     // --- Auth ---
 
     // $kdf_version: the key derivation the browser used (assets/derive.js, api/kdf.py)
-    public function register(string $username, string $email, string $password, int $kdf_version = 1): array {
+    public function register(string $username, string $email, string $password, int $kdf_version = 1, string $invite = ''): array {
         $body = ['username' => $username, 'email' => $email, 'password' => $password, 'kdf_version' => $kdf_version];
+        if ($invite !== '') {
+            $body['invite'] = $invite;
+        }
         return $this->post('/auth/register', $body);
     }
 

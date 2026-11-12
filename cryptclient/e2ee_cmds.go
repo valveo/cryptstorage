@@ -111,6 +111,9 @@ func requireE2EE(api *apiclient.Client) *apiclient.ServerInfo {
 
 func checkE2EE(api *apiclient.Client) (*apiclient.ServerInfo, error) {
 	info, err := api.ServerInfo()
+	if errors.Is(err, apiclient.ErrClientTooOld) {
+		return nil, err
+	}
 	if err != nil {
 		return nil, fmt.Errorf("Could not reach the server: %v", err)
 	}
@@ -319,14 +322,21 @@ func hostKeys(usbMount string) *sshconn.HostKeyManager {
 func cmdRegister() {
 	api := newAPI("")
 	info := requireE2EE(api)
+	if info.Registration == "closed" {
+		fatal("This server does not take new accounts. Ask its administrator.")
+	}
 	username := promptLine("Choose a username: ")
 	email := promptLine("E-mail address: ")
+	invite := ""
+	if info.Registration == "invite" {
+		invite = promptLine("Invitation code from the administrator: ")
+	}
 	password := promptNewPassword("Choose a password: ")
 	ks, err := e2ee.DeriveSet(info.KdfSalt, username, password)
 	if err != nil {
 		fatal("%v", err)
 	}
-	if err := api.RegisterVersion(username, email, ks.Current.AuthKey, ks.Version); err != nil {
+	if err := api.RegisterInvited(username, email, ks.Current.AuthKey, ks.Version, invite); err != nil {
 		fatal("Registration failed: %v", err)
 	}
 	fmt.Println("✓ Account created. Check your e-mail and confirm the address, then run:")

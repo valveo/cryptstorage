@@ -213,3 +213,18 @@ class UserKdf(Base):
     user_id    = Column(String(36), primary_key=True)
     version    = Column(Integer, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Invite(Base):
+    """An invitation to register (REGISTRATION=invite, admin.py). Only an HMAC of the code is stored,
+    like refresh tokens. It works once, until expires_at, and only for `email` when one was given."""
+    __tablename__ = "invites"
+
+    id         = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    code_hash  = Column(String(64), unique=True, nullable=False)
+    email      = Column(String(255), nullable=True)
+    note       = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at    = Column(DateTime, nullable=True)
+    used_by    = Column(String(36), nullable=True)
