@@ -31,6 +31,11 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 - CI installs a server from scratch with `install.sh` and updates it twice with
   `cryptstorage-update`, on every change to the server side.
 
+### Fixed
+- **The nginx configuration of the unreleased 0.1.2 did not load** ("unknown log format"): the log
+  format with the sign-in step was defined after its first use. The playbook stopped at its nginx
+  check and nginx kept running with the previous configuration. Found by the new installation job.
+
 ### Moving over
 - Nothing to do for a server installed from another machine. To manage such a server with
   `install.sh` and `cryptstorage-update` instead, see `ansible/README.md`, "Moving the settings
