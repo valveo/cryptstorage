@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -139,6 +140,20 @@ func TestIntegrationTamper(t *testing.T) {
 	}
 	tamperReport(t, "old conf, new password", "refused", opens(newKeys))
 	tamperReport(t, "old conf, old password", "opens", opens(tv.keys))
+
+	// The feature flags in gocryptfs.conf are not covered by the wrapped key's authentication. A server that
+	// swaps them for "PlaintextNames" would have gocryptfs store every new file under its real name; the
+	// client refuses a config whose flags are not exactly its own (e2ee.ErrUnsafeConf) before it mounts.
+	var doc map[string]any
+	if err := json.Unmarshal(oldConf, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["FeatureFlags"] = []string{"HKDF", "GCMIV128", "PlaintextNames"}
+	plainNames, _ := json.Marshal(doc)
+	tv.write(confPath, plainNames)
+	tamperReport(t, "conf with PlaintextNames", "refused", opens(tv.keys))
+	tv.write(confPath, oldConf)
+	tamperReport(t, "conf put back", "opens", opens(tv.keys))
 
 	// The check file replaced by another valid file: unlocking does not notice, but recovery with the right
 	// code then refuses, because the check file reads back with the wrong content

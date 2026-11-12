@@ -151,6 +151,10 @@ prototype and has not been audited.
     previous config (`gocryptfs.conf.bak`) once a change is done and on every connect, but a server or a
     backup that kept a copy still opens with the old password: a password change does not lock out someone who
     knew the old password and holds a copy of the server's files. That needs a new master key.
+  - *Changed volume settings refused:* the feature flags in `gocryptfs.conf` are not covered by the wrapped
+    key's authentication, so a server could swap them (for example to `PlaintextNames`, which stores new file
+    names in the clear). The client accepts only its own exact set of flags and mounts from a local copy of
+    the config it checked, never from the server's file directly (fixed in 0.1.2; earlier clients did not check).
   - *Recovery refused:* a replaced check file (`.secdisk-canary`) makes recovery with the right code fail.
 - **Offline guessing.** The server holds `gocryptfs.conf` and the login hash, so a weak password can be guessed
   offline. The per-server salt means the guessing can only start once the server's data is taken, and must be
