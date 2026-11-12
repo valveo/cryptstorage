@@ -154,19 +154,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # GitHub's API answers 5xx now and then; a draft that got created half-way is removed before the next try
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "A release for $GITHUB_REF_NAME exists already; not touching it."; exit 1
-          fi
+          # GitHub's API answers 5xx now and then, so three tries. A draft left by a failed try (or by
+          # an earlier attempt of this job) is replaced; a published release is never touched.
+          state() { gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null || echo none; }
           for try in 1 2 3; do
+            case "$(state)" in
+              false) echo "A published release for $GITHUB_REF_NAME exists already; not touching it."; exit 1 ;;
+              true) gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes ;;
+            esac
             if gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft --prerelease \
                 --title "CryptStorage $VERSION" \
                 --notes "Pre-release, not independently audited. Verify the download first: docs/verify-release.md"; then
               exit 0
-            fi
-            # never a published release: only a draft of this tag may be removed
-            if [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null)" = true ]; then
-              gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes || true
             fi
             sleep $((try * 20))
           done
