@@ -132,6 +132,18 @@ def min_client_version() -> str:
     return os.getenv("MIN_CLIENT_VERSION", "").strip().lstrip("v")
 
 
+def latest_client_version(server_version: str) -> str:
+    """The newest client the users of this server should have ("0.1.3"), sent in /server-info so that
+    an older app can say that an update exists. LATEST_CLIENT_VERSION sets it; without that it is the
+    server's own release version, since server and app are released together. Empty for a
+    development build: no notice."""
+    v = os.getenv("LATEST_CLIENT_VERSION", "").strip().lstrip("v")
+    if not v:
+        m = re.match(r"\d+\.\d+\.\d+(?=$|[ (])", server_version or "")
+        v = m.group(0) if m else ""
+    return v
+
+
 def change_delay_hours() -> float:
     """How long a new SSH key or an account deletion waits before it takes effect."""
     return float(os.getenv("CHANGE_DELAY_HOURS", "24"))
@@ -165,6 +177,9 @@ def validate() -> None:
         raise ConfigError(f"REGISTRATION must be one of {REGISTRATION_MODES}.")
     if min_client_version() and not _VERSION.fullmatch(min_client_version()):
         raise ConfigError("MIN_CLIENT_VERSION must look like 0.1.2.")
+    explicit = os.getenv("LATEST_CLIENT_VERSION", "").strip().lstrip("v")
+    if explicit and not _VERSION.fullmatch(explicit):
+        raise ConfigError("LATEST_CLIENT_VERSION must look like 0.1.3.")
     if recovery_policy() not in RECOVERY_POLICIES:
         raise ConfigError(f"RECOVERY_POLICY must be one of {RECOVERY_POLICIES}.")
     if recovery_policy() != "user":

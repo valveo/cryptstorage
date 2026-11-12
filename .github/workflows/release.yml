@@ -59,6 +59,11 @@ jobs:
           bash packaging/linux/build-deb.sh "$VERSION"
           cp packaging/linux/dist/deb/*.deb ../dist/
           "../dist/cryptclient-$VERSION-linux-amd64" version | grep -qF "$VERSION"
+      # what cryptstorage-update downloads: listed in the signed SHA256SUMS like the client files
+      - name: Server package
+        run: |
+          scripts/server-package.sh "$VERSION" dist
+          tar -xzOf "dist/cryptstorage-server-$VERSION.tar.gz" "cryptstorage-$VERSION/VERSION" | grep -F "$VERSION ("
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux

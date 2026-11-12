@@ -37,6 +37,7 @@ jobs:
       passkeys: ${{ steps.f.outputs.passkeys }}
       sftpgo: ${{ steps.f.outputs.sftpgo }}
       e2ee: ${{ steps.f.outputs.e2ee }}
+      install: ${{ steps.f.outputs.install }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -63,6 +64,7 @@ jobs:
           has '^(api/|webui/|tests/browser/|cryptclient/)' && echo passkeys=true >>"$GITHUB_OUTPUT"
           has '^(ansible/|cryptdaemon/|scripts/(sftpgo_container_test|install_sftpgo)\.sh$)' && echo sftpgo=true >>"$GITHUB_OUTPUT"
           has '^(api/|cryptdaemon/|cryptclient/|webui/assets/|scripts/)' && echo e2ee=true >>"$GITHUB_OUTPUT"
+          has '^(install\.sh$|ansible/|scripts/|api/|cryptdaemon/|webui/)' && echo install=true >>"$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
   python:
@@ -222,3 +224,99 @@ jobs:
         # ports of its own: the test server's API (8099) and SFTPGo keep running beside it. LD_LIBRARY_PATH:
         # the Python of setup-python does not start without it, and sudo drops it
         run: sudo env "PATH=$PATH" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" PYTHONDONTWRITEBYTECODE=1 PORT_API=18099 PORT_SFTP=12222 SFTPGO_API_PORT=18089 scripts/e2ee_integration.sh
+
+  install:
+    # A real installation on a fresh machine with install.sh (the whole playbook: firewall, Docker,
+    # the stack, nginx with a self-signed certificate), then two real updates with
+    # cryptstorage-update from release packages built here. Only on GitHub's throwaway machines:
+    # it takes the machine over.
+    needs: changes
+    if: ${{ needs.changes.outputs.install == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DOMAIN: cryptstorage.test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Refuse to run anywhere but on a hosted runner
+        run: '[ "$RUNNER_ENVIRONMENT" = github-hosted ]'
+      - name: The name of the server points here
+        run: echo "127.0.0.1 $DOMAIN" | sudo tee -a /etc/hosts
+      # The runner image is not a fresh server: its firefox package is a shim that fetches a snap when
+      # upgraded, which fails there and with it the playbook's system upgrade. A server has no such package.
+      - name: Remove what a server would not have
+        run: sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 remove -y -qq firefox
+      - name: Preflight only
+        run: sudo ./install.sh --check
+      - name: Install
+        # A mail server is required, and there is none here: the name given does not exist. The
+        # next step turns e-mail confirmation off so that an account can be made without one.
+        run: |
+          echo "no mail server here" | sudo tee /root/smtp.pw >/dev/null
+          sudo ./install.sh --yes --domain "$DOMAIN" --email admin@example.com --tls selfsigned \
+            --smtp-host smtp.invalid --smtp-user ci --smtp-password-file /root/smtp.pw --smtp-from ci@example.com
+      - name: The server answers and the commands are there
+        run: |
+          set -x
+          curl -fsS -k "https://$DOMAIN/api/health" | tee /tmp/health.json
+          grep -qF "\"version\":\"$(sudo cat /etc/cryptstorage/installed-version)\"" /tmp/health.json
+          curl -fsS -k -o /dev/null "https://$DOMAIN/"
+          curl -fsS -o /dev/null -w '%{http_code}\n' "http://$DOMAIN/" | grep -qx 301
+          sudo cat /etc/cryptstorage/installed-version
+          sudo stat -c '%a %U' /etc/cryptstorage/inventory.yml | grep -qx '600 root'
+          sudo ufw status | grep -q 'Status: active'
+          sudo cryptstorage-admin users
+          sudo cryptstorage-update --help | grep -q -- --full
+          cosign version 2>&1 | grep -F "v$(sed -n 's/^COSIGN_VERSION=//p' install.sh)"
+      - name: A changed setting is applied by running install.sh again
+        run: |
+          sudo sed -i 's/^\( *require_email_verification:\).*/\1 "false"/' /etc/cryptstorage/inventory.yml
+          sudo ./install.sh
+          sudo grep -q 'REQUIRE_EMAIL_VERIFICATION: *false' /opt/cryptstorage/docker-compose.yml
+      - name: An account to carry through the updates
+        run: |
+          curl -fsS -k -H 'Content-Type: application/json' -X POST "https://$DOMAIN/api/auth/register" \
+            -d '{"username": "citest", "email": "citest@example.com", "password": "a long test password 42"}'
+          sudo cryptstorage-admin users | grep -q '^citest '
+      - name: A second run changes no settings
+        run: |
+          sudo sha256sum /etc/cryptstorage/inventory.yml > /tmp/inventory.sum
+          sudo ./install.sh --yes
+          sudo sha256sum -c /tmp/inventory.sum
+          sudo cryptstorage-admin users | grep -q '^citest '
+      - name: Two release packages
+        run: |
+          for v in 99.0.0 99.0.1; do
+            scripts/server-package.sh "$v" "/tmp/releases/v$v"
+            ( cd "/tmp/releases/v$v" && sha256sum -- * > SHA256SUMS )
+          done
+      # the packages made here carry no signature: with cosign installed the update must refuse them
+      - name: An unsigned release is refused before anything is touched
+        run: |
+          if sudo env "CRYPTSTORAGE_RELEASES=file:///tmp/releases" cryptstorage-update --yes --version 99.0.0; then exit 1; fi
+          sudo test ! -e /var/backups/cryptstorage
+      - name: Update (backup of what the upgrade changes)
+        run: |
+          sudo env "CRYPTSTORAGE_RELEASES=file:///tmp/releases" cryptstorage-update --yes --version 99.0.0 --no-signature-check
+          curl -fsS -k "https://$DOMAIN/api/health" | grep -F '"version":"99.0.0 ('
+          sudo sh -c 'ls -d /var/backups/cryptstorage/*-without-files'
+          sudo sh -c 'cd /var/backups/cryptstorage/*-without-files && sha256sum -c SHA256SUMS && test -s db.sql.gz && test -s settings.tar.gz && test ! -e storage.tar.gz'
+          sudo cryptstorage-admin users | grep -q '^citest '
+      - name: The same version again is nothing to do, an older one is refused
+        run: |
+          sudo env "CRYPTSTORAGE_RELEASES=file:///tmp/releases" cryptstorage-update --yes --version 99.0.0 --no-signature-check | grep -q 'Nothing to do'
+          if sudo cryptstorage-update --yes --version 0.1.0 --no-signature-check; then exit 1; fi
+      - name: Update with --full (complete backup)
+        run: |
+          sudo env "CRYPTSTORAGE_RELEASES=file:///tmp/releases" cryptstorage-update --yes --version 99.0.1 --no-signature-check --full --backup-dir /srv/backups
+          curl -fsS -k "https://$DOMAIN/api/health" | grep -F '"version":"99.0.1 ('
+          sudo sh -c 'cd /srv/backups/cryptstorage-* && sha256sum -c SHA256SUMS && test -s storage.tar.gz && test ! -e WITHOUT-FILES.txt'
+          sudo cryptstorage-admin users | grep -q '^citest '
+      - name: What the server says when something failed
+        if: failure()
+        run: |
+          sudo docker ps -a || true
+          sudo docker compose -f /opt/cryptstorage/docker-compose.yml logs --tail 80 || true
+          sudo journalctl -u cryptdaemon -n 50 --no-pager || true
+          sudo nginx -t || true
+

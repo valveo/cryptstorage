@@ -137,3 +137,32 @@ func TestRegisterSaysWhyItWasRefused(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestServerInfoReportsANewerClientOnce(t *testing.T) {
+	old, oldHook := ClientVersion, OnUpdateAvailable
+	t.Cleanup(func() { ClientVersion, OnUpdateAvailable = old, oldHook; updateVersion = "" })
+	var told []string
+	OnUpdateAvailable = func(v string) { told = append(told, v) }
+	c := stubAPI(t, 200, `{"storage_mode":"e2ee","latest_client_version":"v0.1.3"}`)
+
+	ClientVersion = "0.1.3"
+	if info, err := c.ServerInfo(); err != nil || info.NewerClient() != "" || AvailableUpdate() != "" {
+		t.Fatalf("the newest version itself has nothing to update to: %v", err)
+	}
+	ClientVersion = "dev"
+	if info, _ := c.ServerInfo(); info.NewerClient() != "" {
+		t.Fatal("a development build is not told to update")
+	}
+	ClientVersion = "0.1.2"
+	for i := 0; i < 3; i++ {
+		if info, err := c.ServerInfo(); err != nil || info.NewerClient() != "0.1.3" {
+			t.Fatalf("want 0.1.3, got %v %v", info, err)
+		}
+	}
+	if len(told) != 1 || told[0] != "0.1.3" || AvailableUpdate() != "0.1.3" {
+		t.Fatalf("told once per version, got %v", told)
+	}
+	if !strings.HasPrefix(ReleasesURL, "https://") {
+		t.Fatal("the releases address is fixed in the program and uses https")
+	}
+}

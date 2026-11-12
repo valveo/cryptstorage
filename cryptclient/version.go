@@ -44,3 +44,8 @@ func devVersion(settings []debug.BuildSetting) string {
 	}
 	return v
 }
+
+// updateNotice is what the user is told when the server reports a newer version of the app.
+func updateNotice(version string) string {
+	return "A newer version of CryptStorage is available: " + version + " (this is " + appVersion() + ")."
+}

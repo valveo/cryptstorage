@@ -6,6 +6,81 @@ db, SFTPGo), cryptdaemon, firewall, fail2ban, automatic security updates.
 Tested from a clean install on Ubuntu 26.04 (1 vCPU, 1 GB RAM VPS). Also meant for
 Ubuntu 24.04 and Debian 12/13; the playbook stops at once on anything else.
 
+There are two ways to run it, and both run the same playbook:
+
+- **On the server itself** with `install.sh`: no second machine, the settings live on the server,
+  and `cryptstorage-update` installs later versions. See the next section.
+- **From another machine** with Ansible, as described from "What you need" on. The settings and
+  secrets then stay on that machine, which suits several servers and Ansible Vault.
+
+---
+
+## On the server itself (install.sh)
+
+Unpack the release's server package (`cryptstorage-server-X.Y.Z.tar.gz`, checked as
+[docs/verify-release.md](../docs/verify-release.md) says) or clone the repository at a release tag
+on the server, then:
+
+```bash
+sudo ./install.sh --check      # only looks: system, memory, disk, ports, DNS. Changes nothing
+sudo ./install.sh              # asks for the domain, mail server and registration mode, then installs
+```
+
+Without a terminal give the answers as options and add `--yes` (`./install.sh --help` lists them;
+the SMTP password is read from a file so that it does not end up in the shell history).
+
+What it does:
+
+1. **Checks the server** and stops before changing anything if it cannot work: Ubuntu 24.04+ or
+   Debian 12+, x86_64 or aarch64, systemd, 1 GB of memory, 5 GB of free disk, ports 80, 443 and the
+   SFTP port free, and the domain resolving (Let's Encrypt needs it).
+2. **Writes the settings** to `/etc/cryptstorage/inventory.yml` (root only), with secrets generated
+   for this server. This file is an ordinary inventory of this playbook: every variable below works
+   in it. **Keep a copy of it off the server**: without `totp_encryption_key` a restored server
+   cannot read the users' second factors and stick secrets.
+3. **Installs Ansible into a directory of its own** (`/opt/cryptstorage-installer`, a Python
+   virtual environment), so nothing else on the system depends on it, and runs the playbook against
+   the local machine.
+4. Installs `cryptstorage-update` next to `cryptstorage-backup` and `cryptstorage-admin`, and
+   `cosign` (a fixed version, accepted only when it matches its published checksum) so that
+   `cryptstorage-update` can check release signatures. If it cannot be downloaded the installation
+   still completes and says so.
+
+Run `install.sh` again whenever you have edited the settings: it reads the saved file, asks
+nothing and only fixes what differs. Options given on a later run are ignored; the file decides.
+
+Differences from a remote Ansible run, all on purpose:
+
+- **SSH password logins are left as they are** (`ssh_keys_only: false`), because the script cannot
+  know how you reach the server. Set it to `true` in the settings once you sign in with a key.
+- **The firewall keeps the port open that sshd really listens on** (`ssh_port`), not just 22.
+- **A mail server is required.** Confirming addresses, setting up the authenticator app and the
+  security notices to account owners all go by e-mail, so `install.sh` does not install without the
+  SMTP settings.
+
+`--tls selfsigned` makes a self-signed certificate instead of asking Let's Encrypt. It is for tests
+and closed networks: browsers warn, and the apps must be given the server's pin.
+
+### Moving the settings onto the server
+
+A server that was installed from another machine has no `/etc/cryptstorage/inventory.yml`, and
+`install.sh` and `cryptstorage-update` refuse to touch it: new settings would mean new secrets, which
+would lock every user out. To manage it on the server from now on, copy **your existing inventory**
+there as `/etc/cryptstorage/inventory.yml` (mode 600, root; decrypt Vault values first) and replace
+the host entry with:
+
+```yaml
+all:
+  hosts:
+    cryptstorage:
+      ansible_connection: local
+      ansible_python_interpreter: /usr/bin/python3
+```
+
+Remove `client_downloads_src` if you use it (that folder is on the other machine), then run
+`sudo ./install.sh` from the version the server runs now. It must report no surprises before you
+use `cryptstorage-update`.
+
 ---
 
 ## What you need
@@ -115,12 +190,15 @@ ansible/
 | `recovery_policy`, `escrow_public_key` | `user`, `escrow` or `both` (docs/design-e2ee.md) |
 | `registration` | Who may create an account: `open` (anyone who reaches the server; the default), `invite` (only with a code from `cryptstorage-admin invite create`) or `closed`. **Set `invite` or `closed` on a server that is not meant for the public** |
 | `registration_email_domains` | Optional. Only addresses of these domains may register, e.g. `example.org,example.com` |
-| `min_client_version` | Optional, e.g. `0.1.2`. Clients older than this tell their user to update instead of opening the storage (clients before 0.1.2 do not know the setting and are not stopped by it) |
+| `min_client_version` | Optional, e.g. `0.1.3`. Clients older than this tell their user to update instead of opening the storage (clients before 0.1.3 do not know the setting and are not stopped by it) |
+| `latest_client_version` | Optional. The newest app version; older apps (0.1.3 and later) tell their user that an update exists and where the releases are. Default: the server's own release version, since server and app are released together. The server only announces the number: the download address is fixed in the app |
 | `required_factors`, `change_delay_hours` | Account protection (docs/design-factors.md) |
 | `server_timezone`, `server_locale` | Optional, e.g. `Europe/Helsinki`, `fi_FI.UTF-8` (default UTC, image locale) |
 | `swap_size_mb` | Swap file made when RAM < 2 GB (default 2048, `0` = never) |
 | `demo_quota_mb`, `demo_max_users`, `demo_account_lifetime_hours` | **Demo server only.** Quota of new accounts, cap on accounts, and deletion of accounts (with their data) after N hours. Off by default |
 | `client_downloads_src` | Optional. A folder **on the control node** with the client builds (Windows installer, `.deb`, binaries, as `.github/workflows/release.yml` makes them). The playbook serves them at `https://<domain>/download/` with a page listing their SHA-256 sums, and the web UI links to it. Re-run with `--tags downloads` after a new build; files no longer in the folder are removed. Empty = no download page |
+| `ssh_port` | The port of the server's own SSH service that the firewall keeps open (default 22; `install.sh` reads it from sshd) |
+| `tls_mode` | `letsencrypt` (default) or `selfsigned`: a self-signed certificate, for tests and closed networks only |
 | `ssh_keys_only` | Turn off SSH password logins (default true; skipped if `ansible_password` is set) |
 
 ---

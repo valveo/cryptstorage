@@ -8,6 +8,7 @@ User data is only recoverable from **these things together**:
 | The ciphertext | `/srv/cryptstorage` (`storage_dir`) | The users' encrypted files (gocryptfs format, one directory per user). |
 | The SFTPGo state | `<install_dir>/sftpgo` | SFTPGo's user database and the **SSH host keys**. Without the host keys every client reports a changed server key. |
 | The TLS certificate and key | `/etc/letsencrypt` | The clients **pin the server's public key** (saved on every stick). A restored server with a new key is refused by every client until each stick is set up again. |
+| The settings | `/etc/cryptstorage/inventory.yml` (a server installed with `install.sh`), otherwise your Ansible inventory | Every secret of the installation, among them `totp_encryption_key`. The backup includes the directory when it exists; **keep one more copy apart from the backups**, since whoever has both the database and this file can read the second-factor secrets. |
 | The daemon's settings | `/etc/cryptdaemon` | The SFTPGo admin password that the restored SFTPGo database expects (a new install generates another one, and the daemon could then no longer manage users), and the daemon's auth key. |
 
 The ciphertext is unreadable without a user's password or recovery code, and the database holds no volume
@@ -21,7 +22,8 @@ sudo cryptstorage-backup /srv/backups
 
 The playbook installs `scripts/backup.sh` as `/usr/local/sbin/cryptstorage-backup`. It writes `db.sql.gz`,
 `storage.tar.gz`, `sftpgo.tar.gz`, `cryptdaemon-etc.tar.gz`, `letsencrypt.tar.gz` (when the server has
-`/etc/letsencrypt`) and `SHA256SUMS` into a private (`0700`)
+`/etc/letsencrypt`), `settings.tar.gz` (when the server has `/etc/cryptstorage`, the settings of an
+installation made with `install.sh`) and `SHA256SUMS` into a private (`0700`)
 timestamped directory, and fails if the dump or an archive cannot be read back. Copy the directory
 somewhere else (another machine, another site): a backup on the same disk is not one.
 
@@ -30,6 +32,11 @@ middle of a write. For a clean copy take the backup at a quiet time, snapshot th
 (LVM, ZFS, btrfs) and archive the snapshot, or run it twice and keep the second.
 
 Test restoring regularly; an untested backup is a hope, not a backup.
+
+**Without the files.** `sudo cryptstorage-backup --without-files /srv/backups` leaves `storage.tar.gz`
+out. `cryptstorage-update` takes such a copy before an upgrade ([UPGRADE.md](UPGRADE.md)): it is
+everything an upgrade changes, and small. It is **not a backup of the users' data**; its directory
+name ends in `-without-files` and it holds a note saying so.
 
 ## Restoring (also how to move to another server)
 

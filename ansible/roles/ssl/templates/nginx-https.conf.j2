@@ -1,3 +1,11 @@
+# nginx wants a log format defined before the first access_log that names it.
+# The usual "combined" line plus, as the last field, the API's X-Auth-Step header ("-" when absent).
+# The API sets it on the 401 that only asks for the second factor, which every ordinary sign-in gets
+# once; fail2ban (roles/fail2ban) counts a 401 only when the field is "-". The field comes from the
+# API's answer and stands last, so nothing the client sends (such as its User-Agent) can fake it.
+log_format cryptstorage '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent '
+                        '"$http_referer" "$http_user_agent" step=$upstream_http_x_auth_step';
+
 # Redirect HTTP → HTTPS
 server {
     listen 80;
@@ -14,8 +22,12 @@ server {
     # SSL (managed by certbot)
     ssl_certificate     /etc/letsencrypt/live/{{ domain }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ domain }}/privkey.pem;
+{% if tls_mode | default('letsencrypt') == 'selfsigned' %}
+    ssl_protocols       TLSv1.2 TLSv1.3;
+{% else %}
     include             /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+{% endif %}
 
     # Security headers
     add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
@@ -61,13 +73,6 @@ server {
         limit_req zone=login burst=10 nodelay;
     }
 }
-
-# The usual "combined" line plus, as the last field, the API's X-Auth-Step header ("-" when absent).
-# The API sets it on the 401 that only asks for the second factor, which every ordinary sign-in gets
-# once; fail2ban (roles/fail2ban) counts a 401 only when the field is "-". The field comes from the
-# API's answer and stands last, so nothing the client sends (such as its User-Agent) can fake it.
-log_format cryptstorage '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent '
-                        '"$http_referer" "$http_user_agent" step=$upstream_http_x_auth_step';
 
 # Rate limit zone (define in nginx.conf http block or here)
 # Limits to 10 requests per second per IP

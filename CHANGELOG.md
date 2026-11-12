@@ -3,7 +3,9 @@
 All notable changes are listed here. Versions follow [Semantic Versioning](https://semver.org/); before
 1.0 any release may change the storage format or the API, and the release notes say how to move over.
 
-## [0.1.2] – unreleased
+## [0.1.3] – unreleased
+
+Version 0.1.2 was not released; its changes are part of this one.
 
 ### Security
 - **The app refuses a volume whose settings were changed on the server.** `gocryptfs.conf` is kept on the
@@ -11,7 +13,7 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
   make the app store the names of new files unencrypted. File contents were not affected, and files
   written before the change kept their encrypted names. The app now accepts only the exact settings
   it creates itself and mounts from a checked local copy, never from the server's file directly.
-  **Update the app on every computer.** Operators can then set `min_client_version: 0.1.2`.
+  **Update the app on every computer.** Operators can then set `min_client_version: 0.1.3`.
 - **The second factor can no longer be guessed patiently.** Five wrong codes locked it for 15 minutes,
   again and again, without the owner hearing of it. The lock now grows (15 minutes, 1 hour, then 24 hours
   each time) and the owner gets an e-mail when it starts.
@@ -22,6 +24,26 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
   was banned after a few users signed in. The API marks that answer and the filter skips it.
 
 ### Added
+- **The app says when a newer version exists.** The server announces the newest app version
+  (`latest_client_version`, by default its own release version), and an older app shows a notice
+  on the command line and an "Update to version X..." entry in the tray menu. Nothing is downloaded
+  or installed by itself. The entry opens the project's release page: that address is fixed in the
+  app, so a server can announce a number but cannot send users to a download of its own.
+- **`install.sh`: installing on the server itself.** It checks the server (system, memory, disk,
+  ports, DNS), asks for the domain, the mail server (required) and the registration mode, generates the secrets, saves
+  the settings in `/etc/cryptstorage/inventory.yml` and runs the same Ansible playbook as before
+  against the local machine, with Ansible in a directory of its own. Running it again applies
+  changed settings. `--check` only looks. Installing from another machine works as before.
+- **`cryptstorage-update`** on a server installed that way: downloads the new version's server
+  package, checks it against the signed `SHA256SUMS` (with `cosign`, which `install.sh` installs in a fixed, checksum-verified
+  version; `--no-signature-check` to go without), checks the server, **takes a backup**, installs and waits for the server to report the
+  new version. The backup holds what an upgrade changes (database, SFTPGo state, settings, keys);
+  **`--full`** makes it complete, the users' files included. It runs only when started by hand.
+- **Releases carry a server package** (`cryptstorage-server-X.Y.Z.tar.gz`), listed in the signed
+  `SHA256SUMS` like the app files.
+- `cryptstorage-backup --without-files`, and `/etc/cryptstorage` in every backup when it exists.
+- Settings `tls_mode: selfsigned` (tests and closed networks) and `ssh_port` (the firewall and
+  fail2ban follow the port sshd really uses; default 22 as before).
 - **Registration modes.** `registration: open` (default, as before), `invite` or `closed`, and optionally
   `registration_email_domains`. The apps and the web UI ask for the invitation code.
 - **`cryptstorage-admin`** on the server: list and show accounts, lock and unlock (also closes the
@@ -31,17 +53,22 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 - **Database migrations** run when the API starts (`api/migrate.py`, table `schema_version`), and a
   database from a newer version is refused instead of used. Upgrading and going back:
   [docs/UPGRADE.md](docs/UPGRADE.md).
-- `min_client_version`: apps older than the given version ask for an update (from 0.1.2 on).
+- `min_client_version`: apps older than the given version ask for an update (from 0.1.3 on).
 
 ### Changed
 - Build and deployment are pinned more tightly: every Python package with its hash
   (`api/requirements.lock`), base images by digest, workflow actions by commit, the Go toolchain named in
   `go.mod`; the dependency checks cover indirect dependencies and fail the build.
+- CI installs a server from scratch with `install.sh` and updates it twice with
+  `cryptstorage-update`, on every change to the server side.
 
 ### Moving over
 - Server: deploy as in [docs/UPGRADE.md](docs/UPGRADE.md). New tables are created at start-up; nothing to
   run by hand. The playbook must be run in full (nginx and fail2ban change, not only the containers).
 - An open server stays open: set `registration` in the inventory if that is not what you want.
+- A server installed from another machine keeps being deployed from there. To manage it with
+  `install.sh` and `cryptstorage-update` instead, see `ansible/README.md`, "Moving the settings
+  onto the server". **Do not run `install.sh` with new settings on an existing server**; it refuses.
 
 ## [0.1.1] – 2026-11-03
 

@@ -24,3 +24,14 @@ def test_health_and_server_info_show_it(client):
 def test_version_script_names_the_commit():
     out = subprocess.run([os.path.join(ROOT, "scripts", "version.sh")], capture_output=True, text=True, check=True).stdout
     assert re.fullmatch(r"(dev\+[0-9a-f]{7}(-modified)?|\d[^ ]*) \(\d{4}-\d\d-\d\d\)\n", out), out
+
+
+def test_version_script_reads_the_version_file_of_a_server_package(tmp_path):
+    """cryptstorage-server-X.Y.Z.tar.gz has no git history (scripts/server-package.sh)."""
+    (tmp_path / "scripts").mkdir()
+    script = tmp_path / "scripts" / "version.sh"
+    script.write_bytes(open(os.path.join(ROOT, "scripts", "version.sh"), "rb").read())
+    script.chmod(0o755)
+    (tmp_path / "VERSION").write_text("1.2.3 (2026-11-12)\n")
+    out = subprocess.run([str(script)], capture_output=True, text=True, check=True).stdout
+    assert out == "1.2.3 (2026-11-12)\n"

@@ -1294,6 +1294,7 @@ def server_info(db: Session = Depends(get_db)):
         "kdf_salt": kdf.ensure_salt(db),
         "registration": config.registration(),
         "min_client_version": config.min_client_version() or None,
+        "latest_client_version": config.latest_client_version(version.VERSION) or None,
     }
 
 

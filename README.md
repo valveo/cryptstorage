@@ -35,8 +35,24 @@ appears as a normal folder or drive.
 
 ## Deploying
 
-One fresh Ubuntu 24.04+ or Debian 12+ server (1 GB RAM is enough), a domain pointing to it, and
-Ansible on Linux, macOS or Windows WSL. Full steps: [ansible/README.md](ansible/README.md).
+One fresh Ubuntu 24.04+ or Debian 12+ server (1 GB RAM is enough) and a domain pointing to it.
+
+**On the server itself.** Download `cryptstorage-server-X.Y.Z.tar.gz` from the
+[releases](https://github.com/valveo/cryptstorage/releases), check it
+([docs/verify-release.md](docs/verify-release.md)), unpack it on the server and run:
+
+```
+sudo ./install.sh
+```
+
+It checks the server, asks for the domain, the mail server and who may register, installs
+everything and saves the settings in `/etc/cryptstorage/inventory.yml`. Later versions are installed
+with `sudo cryptstorage-update`, which takes a backup first ([docs/UPGRADE.md](docs/UPGRADE.md)).
+Details: [ansible/README.md](ansible/README.md#on-the-server-itself-installsh).
+
+**From another machine with Ansible** (Linux, macOS or Windows WSL), which suits several servers or
+settings kept in Ansible Vault. `install.sh` runs this same playbook. Full steps:
+[ansible/README.md](ansible/README.md).
 
 ```
 cd ansible

@@ -121,6 +121,7 @@ func cmdTrayWindows() {
 		shell.icons[s] = h
 	}
 	a := &trayApp{shell: shell}
+	a.watchUpdates()
 	err := wingui.RunTray(wingui.TrayConfig{
 		Menu:            func() []wingui.MenuItem { return winMenu(a.menu()) },
 		OnClick:         a.click,

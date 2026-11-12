@@ -29,6 +29,10 @@ const defaultServer = "https://your-server.example.com"
 
 func main() {
 	apiclient.ClientVersion = Version
+	// In a terminal: one line when the server reports a newer version. The tray replaces this (watchUpdates).
+	apiclient.OnUpdateAvailable = func(version string) {
+		fmt.Fprintln(os.Stderr, updateNotice(version)+" Get it from "+apiclient.ReleasesURL)
+	}
 	loadEnvFile(envFilePath())
 	if len(os.Args) < 2 && runtime.GOOS == "windows" && !hasConsole() {
 		cmdTray() // CryptStorage.exe: the window program started from the Start menu or at sign-in

@@ -53,7 +53,7 @@
   ansible.builtin.uri:
     url: "https://{{ domain }}"
     status_code: 200
-    validate_certs: true
+    validate_certs: "{{ tls_mode | default('letsencrypt') != 'selfsigned' }}"
   register: https_check
   ignore_errors: true  # DNS may not have propagated yet
 
