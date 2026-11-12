@@ -3,7 +3,7 @@
 All notable changes are listed here. Versions follow [Semantic Versioning](https://semver.org/); before
 1.0 any release may change the storage format or the API, and the release notes say how to move over.
 
-## [0.1.3] – unreleased
+## [0.1.3] – 2026-11-12
 
 Version 0.1.2 was not released; its changes are part of this one.
 
